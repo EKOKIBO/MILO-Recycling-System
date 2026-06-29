@@ -2,38 +2,37 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Trophy, Users, Settings, Activity, Trash2, Award, 
   Zap, UserPlus, Moon, Sun, Lock, ShieldCheck, 
-  Download, Edit2, Clock, CheckCircle2, XCircle, Smartphone, Server, Eraser, Globe, AlertTriangle, MessageSquare, LogOut, Check, ChevronRight, UserCircle, Loader2, Key, Info, Leaf, Recycle, Globe2, Cloud, Droplets, Medal, Star, Building2, GraduationCap, MapPinned, Badge, DownloadCloud
+  Download, Edit2, Clock, CheckCircle2, XCircle, Smartphone, Server, Eraser, Globe, AlertTriangle, MessageSquare, LogOut, Check, ChevronRight, UserCircle, Loader2, Key, Info, Leaf, Recycle, Globe2, Cloud, Droplets, Medal, Star, Building2, GraduationCap, MapPinned, Badge
 } from 'lucide-react';
 
-// Dynamically detect environment. Connects locally for dev, uses domain for production.
-const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-//const MQTT_BROKER = isLocal ? `ws://${window.location.hostname}:9001` : 'wss://mqtt.milo-robotics.org';
-const MQTT_BROKER = 'wss://mqtt.milo-robotics.org';
+// Safely get local dev URL if running in Vite, otherwise default to production domain
+const getBrokerUrl = () => {
+  try { if (import.meta && import.meta.env && import.meta.env.VITE_MQTT_URL) return import.meta.env.VITE_MQTT_URL; } catch (e) {}
+  return 'wss://mqtt.milo-robotics.org';
+};
+const MQTT_BROKER = getBrokerUrl();
 
+// ISOLATED NAMESPACE to prevent public broker collisions
 const NS = 'milo_v2_system';
 const TOPIC_TX = `${NS}/transactions`;
 const TOPIC_REQ_TX = `${NS}/transactions/request`;
 const TOPIC_LIST_TX = `${NS}/transactions/list`;
 const TOPIC_DEL_TX = `${NS}/transactions/delete`;
 const TOPIC_ERRORS = `${NS}/errors`;
-
 const TOPIC_REQ_USERS = `${NS}/users/request`;
 const TOPIC_LIST_USERS = `${NS}/users/list`;
 const TOPIC_UPDATE_USER = `${NS}/users/update`;
 const TOPIC_AUTH_REQ = `${NS}/auth/request`;
 const TOPIC_AUTH_RES = `${NS}/auth/response`;
-
 const TOPIC_ADMIN_AUTH_REQ = `${NS}/admin/auth/request`;
 const TOPIC_ADMIN_AUTH_RES = `${NS}/admin/auth/response`;
 const TOPIC_ADMIN_MGT = `${NS}/admin/mgt`;
 const TOPIC_ADMIN_LIST_REQ = `${NS}/admin/list/request`;
 const TOPIC_ADMIN_LIST_RES = `${NS}/admin/list/response`;
-
 const TOPIC_FB_SUBMIT = `${NS}/feedback/submit`;
 const TOPIC_FB_REQ = `${NS}/feedback/request`;
 const TOPIC_FB_LIST = `${NS}/feedback/list`;
 const TOPIC_FB_DEL = `${NS}/feedback/delete`;
-
 const TOPIC_PE_SUBMIT = `${NS}/profile_edit/submit`;
 const TOPIC_PE_REQ = `${NS}/profile_edit/request`;
 const TOPIC_PE_LIST = `${NS}/profile_edit/list`;
@@ -52,6 +51,7 @@ const STATIC_STYLES = `
   @keyframes slideUp { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes scaleIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
   @keyframes bounceIn { 0% { opacity: 0; transform: scale(0.3) translateY(30px); } 50% { opacity: 1; transform: scale(1.05) translateY(0); } 100% { opacity: 1; transform: scale(1) translateY(0); } }
+  @keyframes confettiFall { 0% { transform: translateY(-10vh) rotate(0deg); opacity: 1; } 100% { transform: translateY(110vh) rotate(720deg); opacity: 0; } }
 `;
 
 const RaccoonLogo = ({ className }) => (
@@ -66,6 +66,24 @@ const RaccoonLogo = ({ className }) => (
     <path d="M90,40 L75,10 L60,25 Z" fill="currentColor"/>
   </svg>
 );
+
+const Confetti = () => {
+  const colors = ['#f43f5e', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6'];
+  return (
+    <div className="fixed inset-0 pointer-events-none z-[70] overflow-hidden">
+      {Array.from({ length: 60 }).map((_, i) => {
+        const left = Math.random() * 100;
+        const delay = Math.random() * 1.5;
+        const duration = 2.5 + Math.random() * 2;
+        const bg = colors[Math.floor(Math.random() * colors.length)];
+        return (
+          <div key={i} className="absolute w-3 h-3 rounded-sm opacity-0"
+               style={{ left: `${left}%`, top: '-10px', backgroundColor: bg, animation: `confettiFall ${duration}s ease-in ${delay}s forwards` }} />
+        );
+      })}
+    </div>
+  );
+};
 
 const AnimatedNumber = ({ value }) => {
   const [displayValue, setDisplayValue] = useState(value);
@@ -135,7 +153,17 @@ const translations = {
     locked: "Locked", installApp: "Install App",
     username: "Username", adminPanelLink: "Technician / Admin Login", adminAccounts: "Manage Admin Accounts",
     addAdmin: "Create Admin", role: "Role", roleSuper: "Technician (Full Access)", roleOrg: "Org Admin (Restricted)",
-    deleteAdminConfirm: "Delete this admin account?"
+    deleteAdminConfirm: "Delete this admin account?",
+    // New Translations for Achievements
+    badgeFirstDesc: "Recycle your very first item to start your journey.",
+    badgeBronzeDesc: "Recycle 10 items in total.",
+    badgePlasticDesc: "Recycle 20 plastic items.",
+    badgeGlassDesc: "Recycle 20 glass items.",
+    unlockedNew: "Achievement Unlocked!",
+    awesome: "Awesome!",
+    close: "Close",
+    unlocked: "Unlocked",
+    progress: "Progress"
   },
   bg: {
     appTitle: "Смарт Рециклиране", dashboard: "Табло", admin: "Админ", userHub: "Моят Профил", about: "За нас",
@@ -182,9 +210,26 @@ const translations = {
     locked: "Заключено", installApp: "Инсталирай",
     username: "Потребителско име", adminPanelLink: "Вход за Техници / Админи", adminAccounts: "Управление на Админи",
     addAdmin: "Създай Админ", role: "Роля", roleSuper: "Техник (Пълен достъп)", roleOrg: "Орг. Админ (Ограничен)",
-    deleteAdminConfirm: "Изтриване на този админ?"
+    deleteAdminConfirm: "Изтриване на този админ?",
+    // New Translations for Achievements
+    badgeFirstDesc: "Рециклирайте първия си артикул.",
+    badgeBronzeDesc: "Рециклирайте общо 10 артикула.",
+    badgePlasticDesc: "Рециклирайте 20 пластмасови артикула.",
+    badgeGlassDesc: "Рециклирайте 20 стъклени артикула.",
+    unlockedNew: "Ново Постижение!",
+    awesome: "Страхотно!",
+    close: "Затвори",
+    unlocked: "Отключено",
+    progress: "Прогрес"
   }
 };
+
+const getAchievementsData = (totalItems, matCounts, t) => [
+  { id: 'first', title: t.badgeFirst, desc: t.badgeFirstDesc, icon: Star, req: 1, cur: totalItems, color: 'text-indigo-500', colorClass: 'text-indigo-700 bg-indigo-50 border-indigo-200 dark:bg-indigo-900/30 dark:border-indigo-800 dark:text-indigo-300' },
+  { id: 'bronze', title: t.badgeBronze, desc: t.badgeBronzeDesc, icon: Medal, req: 10, cur: totalItems, color: 'text-amber-500', colorClass: 'text-amber-800 bg-amber-50 border-amber-200 dark:bg-amber-900/30 dark:border-amber-800 dark:text-amber-400' },
+  { id: 'plastic', title: t.badgePlastic, desc: t.badgePlasticDesc, icon: Recycle, req: 20, cur: matCounts.plastic || 0, color: 'text-cyan-500', colorClass: 'text-cyan-800 bg-cyan-50 border-cyan-200 dark:bg-cyan-900/30 dark:border-cyan-800 dark:text-cyan-400' },
+  { id: 'glass', title: t.badgeGlass, desc: t.badgeGlassDesc, icon: Zap, req: 20, cur: matCounts.glass || 0, color: 'text-emerald-500', colorClass: 'text-emerald-800 bg-emerald-50 border-emerald-200 dark:bg-emerald-900/30 dark:border-emerald-800 dark:text-emerald-400' },
+];
 
 const parseTimestamp = (ts) => {
   if (!ts) return new Date();
@@ -242,54 +287,21 @@ export default function App() {
   const [adminMessage, setAdminMessage] = useState('');
   const [confirmAction, setConfirmAction] = useState(null);
 
+  // Queues and Modals
   const [popupQueue, setPopupQueue] = useState([]);
   const [activePopup, setActivePopup] = useState(null);
   const [highlightedUser, setHighlightedUser] = useState(null);
   const [installPrompt, setInstallPrompt] = useState(null);
 
-  useEffect(() => {
-    const raccoonSvg = `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M20,40 L40,20 L60,20 L80,40 L90,70 L50,95 L10,70 Z" fill="#1e293b" opacity="0.2"/><path d="M10,40 L35,45 L50,65 L65,45 L90,40 L75,70 L50,95 L25,70 Z" fill="#4f46e5"/><path d="M25,42 C25,42 40,35 50,45 C60,35 75,42 75,42 L80,60 C80,60 65,70 50,55 C35,70 20,60 20,60 Z" fill="#1e293b"/><circle cx="35" cy="50" r="4" fill="#ffffff"/><circle cx="65" cy="50" r="4" fill="#ffffff"/><circle cx="50" cy="75" r="5" fill="#1e293b"/><path d="M10,40 L25,10 L40,25 Z" fill="#4f46e5"/><path d="M90,40 L75,10 L60,25 Z" fill="#4f46e5"/></svg>`;
-    const svgBase64 = btoa(raccoonSvg);
-    const manifest = {
-      name: "MILO Smart Recycling", short_name: "MILO", start_url: "/", display: "standalone",
-      background_color: "#1e293b", theme_color: "#4f46e5",
-      icons: [{ src: "data:image/svg+xml;base64," + svgBase64, sizes: "192x192 512x512", type: "image/svg+xml", purpose: "any maskable" }]
-    };
-    const link = document.createElement('link');
-    link.rel = 'manifest';
-    link.href = URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: 'application/json' }));
-    document.head.appendChild(link);
+  const [selectedAchievement, setSelectedAchievement] = useState(null);
+  const [newAchievementQueue, setNewAchievementQueue] = useState([]);
 
-    if ('serviceWorker' in navigator) {
-      const swCode = `
-        const CACHE_NAME = 'milo-cache-v1';
-        self.addEventListener('install', (e) => self.skipWaiting());
-        self.addEventListener('activate', (e) => e.waitUntil(clients.claim()));
-        self.addEventListener('fetch', (e) => {
-          if (e.request.method !== 'GET' || e.request.url.includes('wss://')) return;
-          e.respondWith(fetch(e.request).then(res => {
-            const clone = res.clone(); caches.open(CACHE_NAME).then(c => c.put(e.request, clone)); return res;
-          }).catch(() => caches.match(e.request)));
-        });`;
-      navigator.serviceWorker.register(URL.createObjectURL(new Blob([swCode], { type: 'application/javascript' }))).catch(()=>{});
-    }
-    
-    const handleInstall = (e) => { e.preventDefault(); setInstallPrompt(e); };
-    window.addEventListener('beforeinstallprompt', handleInstall);
-    
+  useEffect(() => {
     setIsDarkMode(localStorage.getItem('miloTheme') === 'dark');
     const savedLang = localStorage.getItem('miloLang'); if (savedLang) setLang(savedLang);
     const savedUser = localStorage.getItem('miloLoggedIn'); if (savedUser) setLoggedInUser(savedUser);
     const savedOrg = localStorage.getItem('miloOrgType'); if (savedOrg) setOrgType(savedOrg);
-
-    return () => window.removeEventListener('beforeinstallprompt', handleInstall);
   }, []);
-
-  const handleInstallApp = () => {
-    if (!installPrompt) return;
-    installPrompt.prompt();
-    installPrompt.userChoice.then(() => setInstallPrompt(null));
-  };
 
   const toggleTheme = () => { const newTheme = !isDarkMode; setIsDarkMode(newTheme); localStorage.setItem('miloTheme', newTheme ? 'dark' : 'light'); };
   const toggleLang = () => { const newLang = lang === 'en' ? 'bg' : 'en'; setLang(newLang); localStorage.setItem('miloLang', newLang); };
@@ -306,6 +318,7 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
+  // Popup Queue Consumer for Live Transactions
   useEffect(() => {
     if (popupQueue.length > 0 && !activePopup) {
       const nextTx = popupQueue[0];
@@ -324,6 +337,7 @@ export default function App() {
     }
   }, [popupQueue, activePopup]);
 
+  // Robust MQTT Initialization
   useEffect(() => {
     if (mqttClientRef.current) return;
     const initMqtt = () => {
@@ -442,6 +456,33 @@ export default function App() {
 
   const pendingUsers = Object.entries(safeUsers).filter(([_, data]) => data.status === 'pending');
   const activeDirectoryUsers = Object.entries(safeUsers).filter(([_, data]) => data.status !== 'pending');
+
+  // New Achievement Monitor Logic
+  useEffect(() => {
+    if (!loggedInUser || safeTransactions.length === 0) return;
+    
+    const myTxs = safeTransactions.filter(tx => tx.user_code === loggedInUser);
+    if (myTxs.length === 0) return;
+
+    const matCounts = { plastic: 0, glass: 0, tin: 0, paper: 0 };
+    myTxs.forEach(tx => { matCounts[tx.material] = (matCounts[tx.material] || 0) + 1; });
+    const totalItems = myTxs.length;
+
+    const achievementsList = getAchievementsData(totalItems, matCounts, t);
+    const unlockedNow = achievementsList.filter(a => a.cur >= a.req).map(a => a.id);
+    
+    const seenKey = `milo_achievements_seen_${loggedInUser}`;
+    const seenStr = localStorage.getItem(seenKey);
+    const seenIds = seenStr ? JSON.parse(seenStr) : [];
+
+    const newlyUnlockedIds = unlockedNow.filter(id => !seenIds.includes(id));
+
+    if (newlyUnlockedIds.length > 0) {
+      const newAchs = achievementsList.filter(a => newlyUnlockedIds.includes(a.id));
+      setNewAchievementQueue(prev => [...prev, ...newAchs]);
+      localStorage.setItem(seenKey, JSON.stringify([...seenIds, ...newlyUnlockedIds]));
+    }
+  }, [safeTransactions, loggedInUser, t]);
 
   const handleAdminLogin = (e) => {
     e.preventDefault();
@@ -566,6 +607,48 @@ export default function App() {
     <div className={isDarkMode ? 'dark' : ''}>
       <div className="min-h-screen bg-slate-100 dark:bg-slate-900 text-slate-800 dark:text-slate-100 font-sans selection:bg-indigo-200 dark:selection:bg-indigo-900 transition-colors duration-300">
         
+        {/* Confetti Modal for New Achievements */}
+        {newAchievementQueue.length > 0 && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm animate-fade-in">
+            <Confetti />
+            <div className="bg-white dark:bg-slate-800 rounded-3xl shadow-2xl p-8 max-w-sm w-full text-center border-4 border-indigo-500 transform transition-all animate-bounce-in z-50 relative">
+              <div className="mx-auto w-24 h-24 bg-indigo-100 dark:bg-indigo-900/50 rounded-full flex items-center justify-center mb-6">
+                {React.createElement(newAchievementQueue[0].icon, { className: newAchievementQueue[0].color, size: 48 })}
+              </div>
+              <h2 className="text-3xl font-black text-slate-800 dark:text-white mb-2">{t.unlockedNew}</h2>
+              <p className="text-indigo-600 dark:text-indigo-400 font-bold text-xl mb-6">{newAchievementQueue[0].title}</p>
+              <button onClick={() => setNewAchievementQueue(prev => prev.slice(1))} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-xl shadow-sm transition-colors text-lg">
+                {t.awesome}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Selected Achievement Details Modal */}
+        {selectedAchievement && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm animate-fade-in p-4">
+            <div className="bg-white dark:bg-slate-800 rounded-3xl p-6 md:p-8 max-w-sm w-full shadow-2xl border border-slate-200 dark:border-slate-700 animate-scale-in text-center">
+              <div className="mx-auto w-20 h-20 bg-slate-100 dark:bg-slate-700 rounded-full flex items-center justify-center mb-4">
+                {React.createElement(selectedAchievement.icon, { className: selectedAchievement.cur >= selectedAchievement.req ? selectedAchievement.color : 'text-slate-400', size: 40 })}
+              </div>
+              <h3 className="font-bold text-slate-800 dark:text-slate-100 text-2xl mb-2">{selectedAchievement.title}</h3>
+              <p className="text-slate-500 dark:text-slate-400 text-sm mb-6 px-2">{selectedAchievement.desc}</p>
+              
+              <div className="mb-6 text-left">
+                <div className="flex justify-between items-end mb-2">
+                  <span className="text-xs font-bold uppercase text-slate-400">{t.progress}</span>
+                  <span className="text-sm font-bold text-slate-700 dark:text-slate-200">{selectedAchievement.cur} / {selectedAchievement.req}</span>
+                </div>
+                <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-4 overflow-hidden relative">
+                  <div className="bg-indigo-500 h-4 rounded-full transition-all duration-1000 ease-out absolute left-0 top-0" style={{ width: `${Math.min(100, (selectedAchievement.cur / selectedAchievement.req) * 100)}%` }}></div>
+                </div>
+              </div>
+
+              <button onClick={() => setSelectedAchievement(null)} className="w-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold py-3 rounded-xl transition-colors">{t.close}</button>
+            </div>
+          </div>
+        )}
+
         {resetPasswordResult && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm animate-fade-in p-4">
             <div className="bg-white dark:bg-slate-800 rounded-3xl p-6 md:p-8 max-w-sm w-full shadow-2xl border border-slate-200 dark:border-slate-700 animate-scale-in text-center">
@@ -844,6 +927,7 @@ export default function App() {
                      else if(tx.material === 'paper') { co2 += 0.05; water += 2.0; }
                    });
                    const totalItems = myTxs.length;
+                   const achievementsList = getAchievementsData(totalItems, matCounts, t);
 
                    return (
                      <>
@@ -867,26 +951,18 @@ export default function App() {
                         <Badge size={20} className="text-indigo-500"/> {t.achievements}
                       </h2>
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
-                        <div className={`p-4 rounded-3xl text-center border-2 transition-all ${totalItems >= 1 ? 'bg-indigo-50 border-indigo-200 text-indigo-700 dark:bg-indigo-900/30 dark:border-indigo-800 dark:text-indigo-300 shadow-sm' : 'bg-slate-50 border-slate-100 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                          <Star size={32} className={`mx-auto mb-2 ${totalItems >= 1 ? 'text-indigo-500' : 'text-slate-300 dark:text-slate-600'}`} />
-                          <p className="font-bold text-sm">{t.badgeFirst}</p>
-                          <p className="text-[10px] uppercase font-bold mt-1 opacity-70">{totalItems >= 1 ? '1/1' : t.locked}</p>
-                        </div>
-                        <div className={`p-4 rounded-3xl text-center border-2 transition-all ${totalItems >= 10 ? 'bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-900/30 dark:border-amber-800 dark:text-amber-400 shadow-sm' : 'bg-slate-50 border-slate-100 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                          <Medal size={32} className={`mx-auto mb-2 ${totalItems >= 10 ? 'text-amber-600' : 'text-slate-300 dark:text-slate-600'}`} />
-                          <p className="font-bold text-sm">{t.badgeBronze}</p>
-                          <p className="text-[10px] uppercase font-bold mt-1 opacity-70">{totalItems >= 10 ? '10/10' : `${totalItems}/10`}</p>
-                        </div>
-                        <div className={`p-4 rounded-3xl text-center border-2 transition-all ${matCounts.plastic >= 20 ? 'bg-cyan-50 border-cyan-200 text-cyan-800 dark:bg-cyan-900/30 dark:border-cyan-800 dark:text-cyan-400 shadow-sm' : 'bg-slate-50 border-slate-100 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                          <Recycle size={32} className={`mx-auto mb-2 ${matCounts.plastic >= 20 ? 'text-cyan-500' : 'text-slate-300 dark:text-slate-600'}`} />
-                          <p className="font-bold text-sm">{t.badgePlastic}</p>
-                          <p className="text-[10px] uppercase font-bold mt-1 opacity-70">{matCounts.plastic >= 20 ? '20/20' : `${matCounts.plastic}/20`}</p>
-                        </div>
-                        <div className={`p-4 rounded-3xl text-center border-2 transition-all ${matCounts.glass >= 20 ? 'bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-900/30 dark:border-emerald-800 dark:text-emerald-400 shadow-sm' : 'bg-slate-50 border-slate-100 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                          <Zap size={32} className={`mx-auto mb-2 ${matCounts.glass >= 20 ? 'text-emerald-500' : 'text-slate-300 dark:text-slate-600'}`} />
-                          <p className="font-bold text-sm">{t.badgeGlass}</p>
-                          <p className="text-[10px] uppercase font-bold mt-1 opacity-70">{matCounts.glass >= 20 ? '20/20' : `${matCounts.glass}/20`}</p>
-                        </div>
+                        {achievementsList.map(ach => {
+                          const isUnlocked = ach.cur >= ach.req;
+                          const Icon = ach.icon;
+                          return (
+                            <div key={ach.id} onClick={() => setSelectedAchievement(ach)}
+                                 className={`p-4 rounded-3xl text-center border-2 cursor-pointer transition-all hover:scale-105 active:scale-95 shadow-sm ${isUnlocked ? ach.colorClass : 'bg-slate-50 border-slate-100 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
+                              <Icon size={32} className={`mx-auto mb-2 ${isUnlocked ? '' : 'opacity-40'}`} />
+                              <p className="font-bold text-sm leading-tight">{ach.title}</p>
+                              <p className="text-[10px] uppercase font-bold mt-2 opacity-70 tracking-widest">{isUnlocked ? t.unlocked : t.locked}</p>
+                            </div>
+                          );
+                        })}
                       </div>
                      </>
                    );
@@ -952,15 +1028,11 @@ export default function App() {
               </div>
             ) : (
               <div className="space-y-6 animate-fade-in pb-24 md:pb-0">
-                <div className="flex justify-between items-center bg-slate-800 dark:bg-slate-900 rounded-2xl p-4 shadow-lg text-slate-200">
-                  <div className="flex items-center gap-3">
-                    <Server size={20} className={isConnected ? "text-emerald-400" : "text-rose-400"} />
-                    <div><h4 className="font-bold text-sm">{t.dbConnection}</h4><p className="text-xs text-slate-400">{isConnected ? t.connected2Way : t.disconnected}</p></div>
-                  </div>
-                  <div className="flex gap-2">
-                    <button onClick={exportCSV} className="text-xs flex items-center gap-2 bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 py-2 rounded-lg font-semibold transition-colors"><Download size={14} /> <span className="hidden sm:inline">{t.exportData}</span></button>
-                    <button onClick={() => { setIsAdminAuthenticated(false); setAdminToken(null); setAdminRole(null); }} className="text-xs flex items-center gap-2 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 px-3 py-2 rounded-lg font-semibold transition-colors"><LogOut size={14} /></button>
-                  </div>
+                <div className="bg-slate-800 dark:bg-slate-900 rounded-2xl p-4 flex items-center gap-3 text-slate-200 shadow-lg">
+                  <Server size={20} className="text-indigo-400" />
+                  <div className="flex-1"><h4 className="font-bold text-sm">{t.dbConnection}</h4><p className="text-xs text-slate-400">{isConnected ? t.connected2Way : t.disconnected}</p></div>
+                  <button onClick={exportCSV} className="text-xs flex items-center gap-2 bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 py-2 rounded-lg font-semibold transition-colors"><Download size={14} /> <span className="hidden sm:inline">{t.exportData}</span></button>
+                  <button onClick={() => { setIsAdminAuthenticated(false); setAdminToken(null); setAdminRole(null); }} className="text-xs flex items-center gap-2 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 px-3 py-2 rounded-lg font-semibold transition-colors"><LogOut size={14} /></button>
                 </div>
 
                 {adminRole === 'super' && (
