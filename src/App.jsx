@@ -126,17 +126,11 @@ const parseTimestamp = (ts) => {
 // ==========================================
 // UI COMPONENTS
 // ==========================================
-const RaccoonLogo = ({ className }) => (
-  <svg viewBox="0 0 100 100" className={className} xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-    <path d="M20,40 L40,20 L60,20 L80,40 L90,70 L50,95 L10,70 Z" fill="currentColor" opacity="0.2"/>
-    <path d="M10,40 L35,45 L50,65 L65,45 L90,40 L75,70 L50,95 L25,70 Z" fill="currentColor"/>
-    <path d="M25,42 C25,42 40,35 50,45 C60,35 75,42 75,42 L80,60 C80,60 65,70 50,55 C35,70 20,60 20,60 Z" fill="#1e293b"/>
-    <circle cx="35" cy="50" r="4" fill="#ffffff"/>
-    <circle cx="65" cy="50" r="4" fill="#ffffff"/>
-    <circle cx="50" cy="75" r="5" fill="#1e293b"/>
-    <path d="M10,40 L25,10 L40,25 Z" fill="currentColor"/>
-    <path d="M90,40 L75,10 L60,25 Z" fill="currentColor"/>
-  </svg>
+// Brand assets live in /public (see /public/milo_mascot.png and
+// /public/milo_logo_full.png). The mascot is used in the header on a light
+// chip because the artwork's darkest bars would disappear on a dark surface.
+const MascotLogo = ({ className }) => (
+  <img src="/milo_mascot.png" alt="" aria-hidden="true" className={className} draggable="false" />
 );
 
 const Confetti = () => {
@@ -419,20 +413,36 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
-  // Transaction Popup Consumer
+  // Transaction popup: consume the queue.
+  // BUG FIX: this used to also own the dismissal setTimeout and return
+  // clearTimeout as its cleanup. Because setPopupQueue changes a dependency,
+  // React re-ran the effect immediately and the cleanup CANCELLED the timer —
+  // so the popup never auto-closed. The timer now lives in its own effect
+  // keyed only on activePopup.
   useEffect(() => {
     if (popupQueue.length > 0 && !activePopup) {
       const nextTx = popupQueue[0];
-      setActivePopup(nextTx);
       setPopupQueue(prev => prev.slice(1));
+      setActivePopup(nextTx);
       setHighlightedUser(nextTx.user_code);
-      const t1 = setTimeout(() => {
-        setActivePopup(null);
-        setTimeout(() => setHighlightedUser(null), 2000);
-      }, 3500);
-      return () => clearTimeout(t1);
     }
   }, [popupQueue, activePopup]);
+
+  // Dismiss the active popup after 3.5s. Cleanup only runs when activePopup
+  // itself changes, so the timer can no longer be cancelled by queue updates.
+  useEffect(() => {
+    if (!activePopup) return;
+    const dismiss = setTimeout(() => setActivePopup(null), 3500);
+    return () => clearTimeout(dismiss);
+  }, [activePopup]);
+
+  // Fade the leaderboard highlight 2s after the popup closes (unless a new
+  // popup took over in the meantime).
+  useEffect(() => {
+    if (activePopup || !highlightedUser) return;
+    const fade = setTimeout(() => setHighlightedUser(null), 2000);
+    return () => clearTimeout(fade);
+  }, [activePopup, highlightedUser]);
 
   // ==========================================
   // MEMOIZED COMPUTATIONS
@@ -639,12 +649,15 @@ export default function App() {
     window.URL.revokeObjectURL(url);
   };
 
-  // Tri-state node status presentation
+  // Tri-state node status presentation.
+  // NOTE: complete literal class strings on purpose — Tailwind's compiler only
+  // generates classes it can see verbatim in source, so `bg-${color}-500`
+  // interpolation silently produces classes that don't exist in the build.
   const nodeStatus = connectionState === 'online'
-    ? { color: 'emerald', label: t.online, sub: t.connectedPi }
+    ? { icon: 'text-emerald-500', ping: 'bg-emerald-400', dot: 'bg-emerald-500', label: t.online, sub: t.connectedPi }
     : connectionState === 'connecting'
-      ? { color: 'amber', label: t.connecting, sub: t.connecting }
-      : { color: 'rose', label: t.offline, sub: t.disconnected };
+      ? { icon: 'text-amber-500', ping: 'bg-amber-400', dot: 'bg-amber-500', label: t.connecting, sub: t.connecting }
+      : { icon: 'text-rose-500', ping: 'bg-rose-400', dot: 'bg-rose-500', label: t.offline, sub: t.disconnected };
 
   // ==========================================
   // RENDER HELPERS
@@ -760,8 +773,8 @@ export default function App() {
         <header className="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 sticky top-0 z-20 transition-colors duration-300">
           <div className="max-w-6xl mx-auto px-4 h-16 md:h-20 flex items-center justify-between">
             <button type="button" className="flex items-center gap-3 cursor-pointer text-left" onClick={() => setActiveTab('leaderboard')} aria-label="MILO home">
-              <div className="w-10 h-10 md:w-12 md:h-12 bg-indigo-600 rounded-xl text-white flex items-center justify-center shadow-md">
-                <RaccoonLogo className="w-6 h-6 md:w-8 md:h-8" />
+              <div className="w-10 h-10 md:w-12 md:h-12 bg-white rounded-xl border border-slate-200 dark:border-slate-600 flex items-center justify-center shadow-md p-1.5">
+                <MascotLogo className="w-full h-full object-contain" />
               </div>
               <div>
                 <h1 className="text-xl md:text-2xl font-black text-slate-800 dark:text-white tracking-tight leading-none">MILO</h1>
@@ -794,10 +807,9 @@ export default function App() {
           {activeTab === 'about' && (
             <div className="space-y-8 animate-fade-in pb-24 md:pb-0">
               <div className="text-center py-12 px-4 bg-white dark:bg-slate-800 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-700 transition-colors">
-                <div className="mx-auto w-24 h-24 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-full flex items-center justify-center mb-6">
-                  <RaccoonLogo className="w-16 h-16" />
+                <div className="mx-auto w-40 md:w-48 bg-white rounded-3xl border border-slate-200 dark:border-slate-600 p-5 mb-6 shadow-sm">
+                  <img src="/milo_logo_full.png" alt="MILO beta" className="w-full h-auto" draggable="false" />
                 </div>
-                <h1 className="text-4xl md:text-5xl font-black text-slate-800 dark:text-white mb-4">MILO</h1>
                 <p className="text-lg text-slate-500 dark:text-slate-400 max-w-2xl mx-auto">{t.aboutHero}</p>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -844,12 +856,12 @@ export default function App() {
                 <div className="bg-white dark:bg-slate-800 rounded-3xl p-6 shadow-sm border border-slate-200 dark:border-slate-700 transition-colors duration-300">
                   <div className="flex justify-between items-center">
                     <h3 className="font-semibold text-slate-500 dark:text-slate-400 text-sm md:text-base">{t.nodeStatus}</h3>
-                    <Activity size={24} className={`text-${nodeStatus.color}-500`} aria-hidden="true" />
+                    <Activity size={24} className={nodeStatus.icon} aria-hidden="true" />
                   </div>
                   <p className="text-xl md:text-2xl font-bold mt-2 flex items-center gap-2" role="status" aria-live="polite">
                     <span className="relative flex h-3 w-3 md:h-4 md:w-4">
-                      <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 bg-${nodeStatus.color}-400`}></span>
-                      <span className={`relative inline-flex rounded-full h-3 w-3 md:h-4 md:w-4 bg-${nodeStatus.color}-500`}></span>
+                      <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${nodeStatus.ping}`}></span>
+                      <span className={`relative inline-flex rounded-full h-3 w-3 md:h-4 md:w-4 ${nodeStatus.dot}`}></span>
                     </span>
                     {nodeStatus.label}
                   </p>
