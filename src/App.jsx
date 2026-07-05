@@ -21,8 +21,9 @@ const MQTT_USER = import.meta.env?.VITE_MQTT_USER || 'browser';
 const MQTT_PASS = import.meta.env?.VITE_MQTT_PASS || 'goodboy_f@g&gay';
 // Web Push: public VAPID key (pair generated with `npx web-push generate-vapid-keys`;
 // the private half lives ONLY on the Pi as MILO_VAPID_PRIVATE_KEY).
-const VAPID_PUBLIC_KEY = 'BFEREDv8zD4h3UumMdzp-aV4S7KusQAlb_0ihjhh72A3_y-dYtvaEYuNfHGqRzGbvVdZu2kdFlwwCT1jJVUXZvg'//import.meta.env?.VITE_VAPID_PUBLIC_KEY || 'BFEREDv8zD4h3UumMdzp-aV4S7KusQAlb_0ihjhh72A3_y-dYtvaEYuNfHGqRzGbvVdZu2kdFlwwCT1jJVUXZvg';
+const VAPID_PUBLIC_KEY = import.meta.env?.VITE_VAPID_PUBLIC_KEY || 'BFEREDv8zD4h3UumMdzp-aV4S7KusQAlb_0ihjhh72A3_y-dYtvaEYuNfHGqRzGbvVdZu2kdFlwwCT1jJVUXZvg';
 const NS = 'milo_v2_system';
+const FRONTEND_BUILD = '2026-07-05.2'; // shown in the admin bar next to the backend build
 
 // Illustrative per-item averages (kg CO2, litres water, kWh energy saved vs virgin
 // production). Sources vary widely; keep these as motivational estimates.
@@ -146,6 +147,11 @@ const translations = {
     deleteWarn: "This permanently erases your profile, points, history, feedback and rewards. This cannot be undone.",
     consentLabel: "I agree that my name, group and recycling activity are processed for the leaderboard and rewards. I can export or delete my data at any time.",
     weeklyKpi: "This week", kpiItems: "Items", kpiPoints: "Points", kpiActive: "Active users",
+    impactHow: "How it's calculated", impactBreakdown: "Breakdown by material", impactPerItem: "per item",
+    impactDisclaimer: "Illustrative estimates based on average savings from recycling versus producing new materials.",
+    pubDenied: "Broker rejected publish to",
+    confirmDeleteReward: "Remove this reward from the catalog? Past redemptions are kept.",
+    rewardDescEn: "Description (EN, optional)", rewardDescBg: "Description (BG, optional)",
   },
   bg: {
     appTitle: "Смарт Рециклиране", dashboard: "Табло", admin: "Админ", userHub: "Моят Профил", about: "За нас", rewardsTab: "Награди",
@@ -194,6 +200,11 @@ const translations = {
     deleteWarn: "Това изтрива завинаги профила, точките, историята, обратната връзка и наградите ви. Не може да бъде отменено.",
     consentLabel: "Съгласен/на съм името, групата и рециклиращата ми активност да се обработват за класацията и наградите. Мога да изтегля или изтрия данните си по всяко време.",
     weeklyKpi: "Тази седмица", kpiItems: "Артикули", kpiPoints: "Точки", kpiActive: "Активни потребители",
+    impactHow: "Как се изчислява", impactBreakdown: "Разбивка по материал", impactPerItem: "на артикул",
+    impactDisclaimer: "Илюстративни оценки на база средни спестявания при рециклиране спрямо ново производство.",
+    pubDenied: "Брокерът отказа публикуване към",
+    confirmDeleteReward: "Премахване на тази награда от каталога? Минали заявки се запазват.",
+    rewardDescEn: "Описание (EN, по избор)", rewardDescBg: "Описание (BG, по избор)",
   }
 };
 
@@ -299,7 +310,11 @@ export default function App() {
   // Theme-derived composite classes (all fragments are literal strings above).
   const cardCls = `bg-white dark:bg-slate-800 ${th.card} shadow-sm border border-slate-200 dark:border-slate-700 transition-colors`;
   const btnPrimary = `${th.accentBtn} ${th.btnShape} font-bold transition-colors`;
-  const inputCls = `w-full p-4 ${th.input} border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500 outline-none transition-colors`;
+  const fieldChrome = `w-full ${th.input} border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500 outline-none transition-colors`;
+  const inputCls = `${fieldChrome} p-4`;
+  // Compact 48px fields (admin forms & selects): horizontal padding only —
+  // p-4 + h-12 left 16px of content height, which clipped <select> text.
+  const inputSm = `${fieldChrome} px-3 h-12`;
 
   // Connection & Data State
   const [connectionState, setConnectionState] = useState('connecting');
@@ -338,7 +353,7 @@ export default function App() {
   const [editProfileForm, setEditProfileForm] = useState({ name: '', department: '', confirmPass: '' });
   const [adminForm, setAdminForm] = useState({ code: '', name: '', department: '' });
   const [newAdminForm, setNewAdminForm] = useState({ username: '', password: '', role: 'org' });
-  const [rewardForm, setRewardForm] = useState({ title: '', title_bg: '', cost: '', stock: '-1', icon: '🎁' });
+  const [rewardForm, setRewardForm] = useState({ title: '', title_bg: '', cost: '', stock: '-1', icon: '🎁', description: '', description_bg: '' });
   const [adminMessage, setAdminMessage] = useState('');
   const [confirmAction, setConfirmAction] = useState(null);
   const [resetFlow, setResetFlow] = useState(null);
@@ -346,6 +361,10 @@ export default function App() {
   const [gdprModal, setGdprModal] = useState(null);     // { mode: 'export'|'delete', pass, busy }
   const [pushState, setPushState] = useState('idle');   // idle | on | denied | unsupported
   const [toast, setToast] = useState(null);             // { type: 'ok'|'err', msg }
+  const [impactModal, setImpactModal] = useState(null); // { metric: 'co2'|'water'|'energy', matCounts }
+  const [installPrompt, setInstallPrompt] = useState(null); // captured beforeinstallprompt
+  const [backendBuild, setBackendBuild] = useState(null);   // reported via config/list
+  const [rewardInfoModal, setRewardInfoModal] = useState(null); // reward whose description is shown
 
   // Queues & Modals
   const [popupQueue, setPopupQueue] = useState([]);
@@ -377,6 +396,20 @@ export default function App() {
     toastTimerRef.current = setTimeout(() => setToast(null), 4000);
   };
 
+  // Every dashboard publish goes through this helper. With protocolVersion 5,
+  // an ACL denial arrives as PUBACK reason code 135 instead of vanishing —
+  // the historical cause of "the button does nothing" on locked-down brokers.
+  const pub = (topic, jsonString) => {
+    mqttClientRef.current?.publish(topic, jsonString, { qos: 1 }, (err, packet) => {
+      const rc = packet && typeof packet.reasonCode === 'number' ? packet.reasonCode : 0;
+      if (err || rc >= 128) {
+        const reason = err ? (err.message || String(err)) : `rc ${rc}${rc === 135 ? ' — not authorized (aclfile)' : ''}`;
+        showToast(`${tRef.current.pubDenied} ${topic} (${reason})`, 'err');
+        console.error('[MQTT PUBLISH FAILED]', topic, reason);
+      }
+    });
+  };
+
   // ==========================================
   // INITIALIZATION & CLEANUP
   // ==========================================
@@ -392,6 +425,19 @@ export default function App() {
     }
   }, []);
 
+  // PWA install: Chrome on Android fires beforeinstallprompt instead of showing
+  // a visible button; capture it and surface our own Install button.
+  useEffect(() => {
+    const onBip = (e) => { e.preventDefault(); setInstallPrompt(e); };
+    const onInstalled = () => setInstallPrompt(null);
+    window.addEventListener('beforeinstallprompt', onBip);
+    window.addEventListener('appinstalled', onInstalled);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onBip);
+      window.removeEventListener('appinstalled', onInstalled);
+    };
+  }, []);
+
   // Countdown re-render tick (once a minute is plenty)
   useEffect(() => {
     const id = setInterval(() => setNowTick(Date.now()), 60000);
@@ -400,7 +446,24 @@ export default function App() {
 
   const toggleTheme = () => { setIsDarkMode(!isDarkMode); localStorage.setItem('miloTheme', !isDarkMode ? 'dark' : 'light'); };
   const toggleLang = () => { const newLang = lang === 'en' ? 'bg' : 'en'; setLang(newLang); localStorage.setItem('miloLang', newLang); };
-  const handleOrgChange = (e) => { setOrgType(e.target.value); localStorage.setItem('miloOrgType', e.target.value); };
+  const handleOrgChange = (e) => {
+    const v = e.target.value;
+    setOrgType(v); localStorage.setItem('miloOrgType', v); // optimistic; server echo confirms
+    if (adminToken) {
+      pub(`${NS}/config/set`, JSON.stringify({ key: 'org_type', value: v, admin_token: adminToken }));
+    }
+  };
+
+  // Restore push state: if this device already holds a subscription and
+  // permission, show 'on' instead of offering to enable again.
+  useEffect(() => {
+    if (!loggedInUser || pushState !== 'idle') return;
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !VAPID_PUBLIC_KEY) return;
+    navigator.serviceWorker.ready
+      .then(reg => reg.pushManager.getSubscription())
+      .then(sub => { if (sub && typeof Notification !== 'undefined' && Notification.permission === 'granted') setPushState('on'); })
+      .catch(() => {});
+  }, [loggedInUser, pushState]);
 
   // ==========================================
   // MQTT LIFECYCLE
@@ -415,13 +478,16 @@ export default function App() {
       password: MQTT_PASS,
       clean: true,
       reconnectPeriod: 3000,
+      // MQTT v5: mosquitto reports ACL denials in the PUBACK reason code
+      // (135 = not authorized) instead of dropping the message silently.
+      protocolVersion: 5,
     });
     mqttClientRef.current = client;
 
     const topics = [
       `${NS}/transactions`, `${NS}/transactions/list`, `${NS}/errors`,
       `${NS}/users/list`, `${NS}/feedback/list`, `${NS}/profile_edit/list`,
-      `${NS}/stats/list`, `${NS}/rewards/list`, `${NS}/redemptions/list`,
+      `${NS}/stats/list`, `${NS}/rewards/list`, `${NS}/redemptions/list`, `${NS}/config/list`,
       `${NS}/reply/${clientId}/#`,
     ];
 
@@ -435,6 +501,7 @@ export default function App() {
       client.publish(`${NS}/stats/request`, JSON.stringify({}));
       client.publish(`${NS}/rewards/request`, JSON.stringify({}));
       client.publish(`${NS}/redemptions/request`, JSON.stringify({}));
+      client.publish(`${NS}/config/request`, JSON.stringify({}));
     });
 
     client.on('reconnect', () => setConnectionState('connecting'));
@@ -580,6 +647,13 @@ export default function App() {
           case `${NS}/redemptions/list`:
             setRedemptions(Array.isArray(data) ? data : []);
             break;
+          case `${NS}/config/list`:
+            if (data && data.backend_build) setBackendBuild(data.backend_build);
+            if (data && ['office', 'school', 'city'].includes(data.org_type)) {
+              setOrgType(data.org_type);
+              localStorage.setItem('miloOrgType', data.org_type);
+            }
+            break;
           case `${NS}/errors`:
             setHardwareErrors(prev => ({ ...prev, [data.error]: Date.now() }));
             break;
@@ -656,16 +730,19 @@ export default function App() {
   const fallbackScope = useMemo(() => {
     const build = (txs) => {
       const users_ = {}; const teams_ = {}; const materials_ = {};
+      const teamMembers = {}; // BUG FIX: members was initialized to 0 and never counted
       txs.forEach(tx => {
         if (!users_[tx.user_code]) users_[tx.user_code] = { points: 0, items: 0 };
         users_[tx.user_code].points += tx.points; users_[tx.user_code].items += 1;
         materials_[tx.material] = (materials_[tx.material] || 0) + 1;
         const dept = safeUsers[tx.user_code]?.department;
         if (dept) {
-          if (!teams_[dept]) teams_[dept] = { points: 0, items: 0, members: 0 };
+          if (!teams_[dept]) { teams_[dept] = { points: 0, items: 0, members: 0 }; teamMembers[dept] = new Set(); }
           teams_[dept].points += tx.points; teams_[dept].items += 1;
+          teamMembers[dept].add(tx.user_code);
         }
       });
+      Object.keys(teams_).forEach(d => { teams_[d].members = teamMembers[d].size; });
       return { users: users_, teams: teams_, materials: materials_ };
     };
     const weekly = build(safeTransactions.filter(tx => {
@@ -780,7 +857,7 @@ export default function App() {
       attemptingUserRef.current = code;
       attemptingPassRef.current = userAuthForm.password;
       setUserAuthPending(true);
-      mqttClientRef.current?.publish(`${NS}/auth/request`, JSON.stringify({ req_id: reqId, code: code, password: userAuthForm.password, client_id: clientIdRef.current }));
+      pub(`${NS}/auth/request`, JSON.stringify({ req_id: reqId, code: code, password: userAuthForm.password, client_id: clientIdRef.current }));
       setTimeout(() => {
         if (authReqIdRef.current === reqId) {
           setLoginError(t.timeoutErr);
@@ -798,7 +875,7 @@ export default function App() {
     const reqId = Math.random().toString(36);
     authReqIdRef.current = reqId;
     setAdminAuthPending(true);
-    mqttClientRef.current?.publish(`${NS}/admin/auth/request`, JSON.stringify({ req_id: reqId, username: adminAuthForm.username, password: adminAuthForm.password, client_id: clientIdRef.current }));
+    pub(`${NS}/admin/auth/request`, JSON.stringify({ req_id: reqId, username: adminAuthForm.username, password: adminAuthForm.password, client_id: clientIdRef.current }));
     setTimeout(() => {
       if (authReqIdRef.current === reqId) {
         setAdminAuthError(t.timeoutErr);
@@ -811,7 +888,7 @@ export default function App() {
   const submitAccountRequest = (e) => {
     e.preventDefault();
     if (!userAuthForm.consent) return; // GDPR: backend also enforces this
-    mqttClientRef.current?.publish(`${NS}/users/update`, JSON.stringify({
+    pub(`${NS}/users/update`, JSON.stringify({
       action: 'request', code: userAuthForm.code, name: userAuthForm.name,
       department: userAuthForm.department, consent: true
     }));
@@ -820,7 +897,7 @@ export default function App() {
 
   const submitNewPassword = (e) => {
     e.preventDefault();
-    mqttClientRef.current?.publish(`${NS}/users/update`, JSON.stringify({ action: 'set_password', code: userAuthForm.code, password: userAuthForm.password }));
+    pub(`${NS}/users/update`, JSON.stringify({ action: 'set_password', code: userAuthForm.code, password: userAuthForm.password }));
     setLoggedInUser(userAuthForm.code); localStorage.setItem('miloLoggedIn', userAuthForm.code);
     setSessionPassword(userAuthForm.password);
     setUserView('login'); setUserAuthForm(prev => ({ ...prev, password: '' }));
@@ -830,7 +907,7 @@ export default function App() {
     e.preventDefault();
     const pw = sessionPassword || feedbackConfirmPass;
     if (!feedbackText.trim() || !loggedInUser || !pw) return;
-    mqttClientRef.current?.publish(`${NS}/feedback/submit`, JSON.stringify({ code: loggedInUser, message: feedbackText, user_password: pw }));
+    pub(`${NS}/feedback/submit`, JSON.stringify({ code: loggedInUser, message: feedbackText, user_password: pw }));
     setFeedbackText(''); setFeedbackConfirmPass(''); setFeedbackMsg(t.feedbackSent);
     setTimeout(() => setFeedbackMsg(''), 3000);
   };
@@ -839,7 +916,7 @@ export default function App() {
     e.preventDefault();
     const pw = sessionPassword || editProfileForm.confirmPass;
     if (!loggedInUser || !pw) return;
-    mqttClientRef.current?.publish(`${NS}/profile_edit/submit`, JSON.stringify({ code: loggedInUser, name: editProfileForm.name, department: editProfileForm.department, user_password: pw }));
+    pub(`${NS}/profile_edit/submit`, JSON.stringify({ code: loggedInUser, name: editProfileForm.name, department: editProfileForm.department, user_password: pw }));
     setIsEditingProfile(false); setEditProfileForm({ name: '', department: '', confirmPass: '' });
   };
 
@@ -863,7 +940,7 @@ export default function App() {
     }, 6000);
     pendingRedeemRef.current = { rewardId: rm.reward.id, timeoutId };
     setRedeemModal({ ...rm, pending: true });
-    mqttClientRef.current?.publish(`${NS}/rewards/redeem`, JSON.stringify({
+    pub(`${NS}/rewards/redeem`, JSON.stringify({
       code: loggedInUser, user_password: pw, reward_id: rm.reward.id, client_id: clientIdRef.current
     }));
   };
@@ -873,12 +950,13 @@ export default function App() {
     const cost = parseInt(rewardForm.cost, 10);
     const stock = parseInt(rewardForm.stock, 10);
     if (!rewardForm.title || !Number.isFinite(cost) || cost <= 0) return;
-    mqttClientRef.current?.publish(`${NS}/rewards/manage`, JSON.stringify({
+    pub(`${NS}/rewards/manage`, JSON.stringify({
       action: 'add', title: rewardForm.title, title_bg: rewardForm.title_bg,
       cost, stock: Number.isFinite(stock) ? stock : -1, icon: rewardForm.icon || '🎁',
+      description: rewardForm.description, description_bg: rewardForm.description_bg,
       admin_token: adminToken
     }));
-    setRewardForm({ title: '', title_bg: '', cost: '', stock: '-1', icon: '🎁' });
+    setRewardForm({ title: '', title_bg: '', cost: '', stock: '-1', icon: '🎁', description: '', description_bg: '' });
   };
 
   // --- Web Push ---
@@ -888,19 +966,28 @@ export default function App() {
     try {
       const perm = await Notification.requestPermission();
       if (perm !== 'granted') { setPushState('denied'); return; }
-      const reg = await navigator.serviceWorker.ready;
-      const sub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
-      });
-      mqttClientRef.current?.publish(`${NS}/notifications/subscribe`, JSON.stringify({
+      // Don't hang forever if the SW failed to install on this browser.
+      const reg = await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise((_, rej) => setTimeout(() => rej(new Error('service worker not ready')), 5000)),
+      ]);
+      // Reuse an existing subscription (re-registering it server-side is a
+      // harmless INSERT OR REPLACE and re-links it to this account).
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+        });
+      }
+      pub(`${NS}/notifications/subscribe`, JSON.stringify({
         code: loggedInUser, user_password: sessionPassword, subscription: sub.toJSON()
       }));
       setPushState('on');
       showToast(t.notifOn, 'ok');
     } catch (err) {
       console.error('Push subscribe failed', err);
-      showToast(t.notifUnsupported, 'err');
+      showToast(`${t.notifUnsupported} (${err && err.message ? err.message : err})`, 'err');
     }
   };
 
@@ -920,7 +1007,7 @@ export default function App() {
     }, 8000);
     pendingGdprRef.current = { mode: gm.mode, timeoutId };
     setGdprModal({ ...gm, busy: true });
-    mqttClientRef.current?.publish(`${NS}/${topic}`, JSON.stringify({
+    pub(`${NS}/${topic}`, JSON.stringify({
       code: loggedInUser, user_password: pw, client_id: clientIdRef.current
     }));
   };
@@ -929,9 +1016,9 @@ export default function App() {
   const executeConfirmedAction = () => {
     if (!confirmAction || !adminToken) return;
     if (confirmAction.type === 'delete') {
-      mqttClientRef.current?.publish(`${NS}/users/update`, JSON.stringify({ action: 'delete', code: confirmAction.code, admin_token: adminToken }));
+      pub(`${NS}/users/update`, JSON.stringify({ action: 'delete', code: confirmAction.code, admin_token: adminToken }));
     } else if (confirmAction.type === 'clear') {
-      mqttClientRef.current?.publish(`${NS}/transactions/delete`, JSON.stringify({ code: confirmAction.code, admin_token: adminToken }));
+      pub(`${NS}/transactions/delete`, JSON.stringify({ code: confirmAction.code, admin_token: adminToken }));
     } else if (confirmAction.type === 'reset_pass') {
       const clientId = clientIdRef.current;
       const name = confirmAction.name;
@@ -940,18 +1027,18 @@ export default function App() {
       }, 6000);
       pendingResetRef.current = { code: confirmAction.code, name, timeoutId };
       setResetFlow({ status: 'pending', name });
-      mqttClientRef.current?.publish(`${NS}/users/update`, JSON.stringify({ action: 'set_password_admin', code: confirmAction.code, admin_token: adminToken, client_id: clientId }));
+      pub(`${NS}/users/update`, JSON.stringify({ action: 'set_password_admin', code: confirmAction.code, admin_token: adminToken, client_id: clientId }));
     } else if (confirmAction.type === 'delete_admin') {
-      mqttClientRef.current?.publish(`${NS}/admin/mgt`, JSON.stringify({ action: 'delete', username: confirmAction.code, admin_token: adminToken, client_id: clientIdRef.current }));
+      pub(`${NS}/admin/mgt`, JSON.stringify({ action: 'delete', username: confirmAction.code, admin_token: adminToken, client_id: clientIdRef.current }));
     } else if (confirmAction.type === 'delete_reward') {
-      mqttClientRef.current?.publish(`${NS}/rewards/manage`, JSON.stringify({ action: 'delete', reward_id: confirmAction.rewardId, admin_token: adminToken }));
+      pub(`${NS}/rewards/manage`, JSON.stringify({ action: 'delete', reward_id: confirmAction.rewardId, admin_token: adminToken }));
     }
   };
 
   const handleAdminSave = (e) => {
     e.preventDefault();
     if (!adminForm.code || !adminForm.name) return;
-    mqttClientRef.current?.publish(`${NS}/users/update`, JSON.stringify({ action: 'set', code: adminForm.code, name: adminForm.name, department: adminForm.department, admin_token: adminToken }));
+    pub(`${NS}/users/update`, JSON.stringify({ action: 'set', code: adminForm.code, name: adminForm.name, department: adminForm.department, admin_token: adminToken }));
     setAdminMessage(`${adminForm.name} saved!`);
     setAdminForm({ code: '', name: '', department: '' });
     setTimeout(() => setAdminMessage(''), 3000);
@@ -960,12 +1047,12 @@ export default function App() {
   const submitNewAdmin = (e) => {
     e.preventDefault();
     if (!newAdminForm.username || !newAdminForm.password) return;
-    mqttClientRef.current?.publish(`${NS}/admin/mgt`, JSON.stringify({ action: 'add', username: newAdminForm.username, password: newAdminForm.password, role: newAdminForm.role, admin_token: adminToken, client_id: clientIdRef.current }));
+    pub(`${NS}/admin/mgt`, JSON.stringify({ action: 'add', username: newAdminForm.username, password: newAdminForm.password, role: newAdminForm.role, admin_token: adminToken, client_id: clientIdRef.current }));
     setNewAdminForm({ username: '', password: '', role: 'org' });
   };
 
   const resolveRedemption = (id, action) => {
-    mqttClientRef.current?.publish(`${NS}/redemptions/resolve`, JSON.stringify({ id, action, admin_token: adminToken }));
+    pub(`${NS}/redemptions/resolve`, JSON.stringify({ id, action, admin_token: adminToken }));
   };
 
   const logoutUser = () => {
@@ -1155,6 +1242,52 @@ export default function App() {
           </div>
         )}
 
+        {/* Environmental impact detail modal */}
+        {impactModal && (() => {
+          const meta = {
+            co2: { label: t.co2Saved, unit: 'kg', factor: 'co2', icon: Cloud, eqIcon: Car, eq: (v) => `${Math.round(v * EQUIV.kmPerKgCo2)} ${t.eqKm}` },
+            water: { label: t.waterSaved, unit: 'L', factor: 'water', icon: Droplets, eqIcon: ShowerHead, eq: (v) => `${Math.round(v * EQUIV.showersPerL)} ${t.eqShowers}` },
+            energy: { label: t.energySaved, unit: 'kWh', factor: 'energy', icon: Zap, eqIcon: BatteryCharging, eq: (v) => `${Math.round(v * EQUIV.chargesPerKwh)} ${t.eqCharges}` },
+          }[impactModal.metric];
+          const rows = Object.entries(impactModal.matCounts || {}).filter(([m, n]) => n > 0 && IMPACT[m]);
+          const total = rows.reduce((s, [m, n]) => s + IMPACT[m][meta.factor] * n, 0);
+          return (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm animate-fade-in p-4" role="dialog" aria-modal="true">
+              <div className={`bg-white dark:bg-slate-800 ${th.card} p-6 md:p-8 max-w-sm w-full shadow-2xl border border-slate-200 dark:border-slate-700 animate-scale-in`}>
+                <div className={`mx-auto w-16 h-16 ${th.accentSoft} ${th.chip} flex items-center justify-center mb-4`}>{React.createElement(meta.icon, { size: 30, 'aria-hidden': true })}</div>
+                <h3 className="font-bold text-slate-800 dark:text-slate-100 text-xl mb-1 text-center">{meta.label}</h3>
+                <p className={`text-center font-black text-3xl mb-1 ${th.accentText}`}>{total.toFixed(1)} {meta.unit}</p>
+                <p className="text-center text-xs text-slate-400 mb-5 flex items-center justify-center gap-1">{React.createElement(meta.eqIcon, { size: 12, 'aria-hidden': true })} ≈ {meta.eq(total)}</p>
+                <p className="text-xs font-bold uppercase text-slate-400 mb-2">{t.impactBreakdown}</p>
+                <div className="space-y-2 mb-4">
+                  {rows.map(([m, n]) => (
+                    <div key={m} className={`flex justify-between items-center gap-2 text-sm bg-slate-50 dark:bg-slate-900 ${th.chip} px-3 py-2`}>
+                      <span className="capitalize font-semibold text-slate-700 dark:text-slate-200 shrink-0">{m} × {n}</span>
+                      <span className="text-slate-500 dark:text-slate-400 text-right text-xs">{IMPACT[m][meta.factor].toFixed(2)} {meta.unit} {t.impactPerItem} = <strong className={th.accentText}>{(IMPACT[m][meta.factor] * n).toFixed(1)} {meta.unit}</strong></span>
+                    </div>
+                  ))}
+                  {rows.length === 0 && <p className="text-sm text-slate-400 text-center">{t.dbEmpty}</p>}
+                </div>
+                <p className="text-[11px] text-slate-400 mb-5">{t.impactDisclaimer}</p>
+                <button type="button" onClick={() => setImpactModal(null)} className={`w-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold py-3 ${th.btnShape} transition-colors`}>{t.close}</button>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Reward description modal */}
+        {rewardInfoModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm animate-fade-in p-4" role="dialog" aria-modal="true">
+            <div className={`bg-white dark:bg-slate-800 ${th.card} p-6 md:p-8 max-w-sm w-full shadow-2xl border border-slate-200 dark:border-slate-700 animate-scale-in text-center`}>
+              <div className="text-6xl mb-3" aria-hidden="true">{rewardInfoModal.icon || '🎁'}</div>
+              <h3 className="font-bold text-slate-800 dark:text-slate-100 text-xl mb-1">{lang === 'bg' && rewardInfoModal.title_bg ? rewardInfoModal.title_bg : rewardInfoModal.title}</h3>
+              <p className={`font-black text-2xl mb-4 ${th.accentText}`}>{rewardInfoModal.cost} {t.points.toLowerCase()}</p>
+              <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed mb-6 whitespace-pre-wrap text-left">{lang === 'bg' ? (rewardInfoModal.description_bg || rewardInfoModal.description) : rewardInfoModal.description}</p>
+              <button type="button" onClick={() => setRewardInfoModal(null)} className={`w-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold py-3 ${th.btnShape} transition-colors`}>{t.close}</button>
+            </div>
+          </div>
+        )}
+
         {/* Generic confirm modal */}
         {confirmAction && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm animate-fade-in p-4" role="dialog" aria-modal="true">
@@ -1164,7 +1297,7 @@ export default function App() {
               </div>
               <h3 className="font-bold text-slate-800 dark:text-slate-100 text-xl mb-2">{t.confirmAction}</h3>
               <p className="text-slate-500 dark:text-slate-400 text-sm mb-8 px-2">
-                {confirmAction.type === 'delete' ? t.confirmDelete : (confirmAction.type === 'clear' ? t.confirmClear : (confirmAction.type === 'delete_admin' ? t.deleteAdminConfirm : (confirmAction.type === 'delete_reward' ? t.confirmDelete : t.confirmReset)))}
+                {confirmAction.type === 'delete' ? t.confirmDelete : (confirmAction.type === 'clear' ? t.confirmClear : (confirmAction.type === 'delete_admin' ? t.deleteAdminConfirm : (confirmAction.type === 'delete_reward' ? t.confirmDeleteReward : t.confirmReset)))}
                 <br /><strong className="mt-2 block text-slate-700 dark:text-slate-300">{confirmAction.name}</strong>
               </p>
               <div className="flex gap-3">
@@ -1189,6 +1322,13 @@ export default function App() {
             </button>
 
             <div className="flex items-center gap-2 md:gap-4">
+              {installPrompt && (
+                <button type="button" aria-label={t.installApp}
+                        onClick={async () => { installPrompt.prompt(); try { await installPrompt.userChoice; } catch {} setInstallPrompt(null); }}
+                        className={`flex items-center gap-1.5 ${th.accentBtn} ${th.chip} px-3 py-2 text-xs font-bold shadow-sm`}>
+                  <Download size={14} aria-hidden="true" /> <span className="hidden md:inline">{t.installApp}</span>
+                </button>
+              )}
               <div className={`flex gap-1 bg-slate-100 dark:bg-slate-700 ${th.chip} p-1`}>
                 <button type="button" onClick={toggleLang} aria-label={t.switchLang} className={`px-3 py-1.5 ${th.chip} text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-600 transition-colors flex items-center gap-1`}>
                   <Globe size={14} aria-hidden="true" /> {lang.toUpperCase()}
@@ -1290,28 +1430,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Community environmental impact */}
-              <div className={`${cardCls} ${th.cardPad}`}>
-                <h2 className="text-lg md:text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2 mb-4"><Leaf className="text-emerald-500" aria-hidden="true" /> {t.communityImpact}</h2>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  <div className={`bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 ${th.card} p-4`}>
-                    <p className="text-xs font-bold uppercase text-emerald-700 dark:text-emerald-400 flex items-center gap-1"><Cloud size={14} aria-hidden="true" /> {t.co2Saved}</p>
-                    <p className="text-2xl font-black mt-1 text-emerald-800 dark:text-emerald-300">{communityImpact.co2.toFixed(1)} kg</p>
-                    <p className="text-xs text-emerald-600/80 dark:text-emerald-500 mt-1 flex items-center gap-1"><Car size={12} aria-hidden="true" /> ≈ {Math.round(communityImpact.co2 * EQUIV.kmPerKgCo2)} {t.eqKm}</p>
-                  </div>
-                  <div className={`bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 ${th.card} p-4`}>
-                    <p className="text-xs font-bold uppercase text-blue-700 dark:text-blue-400 flex items-center gap-1"><Droplets size={14} aria-hidden="true" /> {t.waterSaved}</p>
-                    <p className="text-2xl font-black mt-1 text-blue-800 dark:text-blue-300">{communityImpact.water.toFixed(0)} L</p>
-                    <p className="text-xs text-blue-600/80 dark:text-blue-500 mt-1 flex items-center gap-1"><ShowerHead size={12} aria-hidden="true" /> ≈ {Math.round(communityImpact.water * EQUIV.showersPerL)} {t.eqShowers}</p>
-                  </div>
-                  <div className={`bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 ${th.card} p-4`}>
-                    <p className="text-xs font-bold uppercase text-amber-700 dark:text-amber-400 flex items-center gap-1"><Zap size={14} aria-hidden="true" /> {t.energySaved}</p>
-                    <p className="text-2xl font-black mt-1 text-amber-800 dark:text-amber-300">{communityImpact.energy.toFixed(1)} kWh</p>
-                    <p className="text-xs text-amber-600/80 dark:text-amber-500 mt-1 flex items-center gap-1"><BatteryCharging size={12} aria-hidden="true" /> ≈ {Math.round(communityImpact.energy * EQUIV.chargesPerKwh)} {t.eqCharges}</p>
-                  </div>
-                </div>
-              </div>
-
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div className={`lg:col-span-2 ${cardCls} overflow-hidden`}>
                   <div className={`${th.cardPad} border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 flex justify-between items-center`}>
@@ -1403,6 +1521,28 @@ export default function App() {
                   </div>
                 </div>
               </div>
+
+              {/* Community environmental impact — below the leaderboard */}
+              <div className={`${cardCls} ${th.cardPad}`}>
+                <h2 className="text-lg md:text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2 mb-4"><Leaf className="text-emerald-500" aria-hidden="true" /> {t.communityImpact}</h2>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <button type="button" onClick={() => setImpactModal({ metric: 'co2', matCounts: scopeData('all').materials })} className={`text-left bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 ${th.card} p-4 hover:shadow-md hover:scale-[1.01] transition-all`}>
+                    <p className="text-xs font-bold uppercase text-emerald-700 dark:text-emerald-400 flex items-center gap-1"><Cloud size={14} aria-hidden="true" /> {t.co2Saved}</p>
+                    <p className="text-2xl font-black mt-1 text-emerald-800 dark:text-emerald-300">{communityImpact.co2.toFixed(1)} kg</p>
+                    <p className="text-xs text-emerald-600/80 dark:text-emerald-500 mt-1 flex items-center gap-1"><Car size={12} aria-hidden="true" /> ≈ {Math.round(communityImpact.co2 * EQUIV.kmPerKgCo2)} {t.eqKm}</p>
+                  </button>
+                  <button type="button" onClick={() => setImpactModal({ metric: 'water', matCounts: scopeData('all').materials })} className={`text-left bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 ${th.card} p-4 hover:shadow-md hover:scale-[1.01] transition-all`}>
+                    <p className="text-xs font-bold uppercase text-blue-700 dark:text-blue-400 flex items-center gap-1"><Droplets size={14} aria-hidden="true" /> {t.waterSaved}</p>
+                    <p className="text-2xl font-black mt-1 text-blue-800 dark:text-blue-300">{communityImpact.water.toFixed(0)} L</p>
+                    <p className="text-xs text-blue-600/80 dark:text-blue-500 mt-1 flex items-center gap-1"><ShowerHead size={12} aria-hidden="true" /> ≈ {Math.round(communityImpact.water * EQUIV.showersPerL)} {t.eqShowers}</p>
+                  </button>
+                  <button type="button" onClick={() => setImpactModal({ metric: 'energy', matCounts: scopeData('all').materials })} className={`text-left bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 ${th.card} p-4 hover:shadow-md hover:scale-[1.01] transition-all`}>
+                    <p className="text-xs font-bold uppercase text-amber-700 dark:text-amber-400 flex items-center gap-1"><Zap size={14} aria-hidden="true" /> {t.energySaved}</p>
+                    <p className="text-2xl font-black mt-1 text-amber-800 dark:text-amber-300">{communityImpact.energy.toFixed(1)} kWh</p>
+                    <p className="text-xs text-amber-600/80 dark:text-amber-500 mt-1 flex items-center gap-1"><BatteryCharging size={12} aria-hidden="true" /> ≈ {Math.round(communityImpact.energy * EQUIV.chargesPerKwh)} {t.eqCharges}</p>
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -1443,6 +1583,9 @@ export default function App() {
                           </div>
                         </div>
                         <div className="flex items-center gap-3 shrink-0">
+                          {(r.description || r.description_bg) && (
+                            <button type="button" onClick={() => setRewardInfoModal(r)} aria-label={`${r.title} — info`} className={`p-2 ${th.chip} text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors`}><Info size={16} aria-hidden="true" /></button>
+                          )}
                           <span className={`font-black ${th.accentText}`}>{r.cost} {t.points.toLowerCase()}</span>
                           <button type="button" onClick={() => openRedeem(r)} disabled={soldOut || cantAfford || !isConnected} className={`${btnPrimary} px-4 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed`}>{t.redeemBtn}</button>
                         </div>
@@ -1456,7 +1599,13 @@ export default function App() {
                     const soldOut = r.stock !== null && r.stock <= 0;
                     const cantAfford = loggedInUser && myBalance < r.cost;
                     return (
-                      <div key={r.id} className={`${cardCls} ${th.cardPad} text-center flex flex-col items-center gap-3 ${soldOut ? 'opacity-60' : 'hover:scale-[1.02]'} transition-transform`}>
+                      <div key={r.id} className={`relative ${cardCls} ${th.cardPad} text-center flex flex-col items-center gap-3 ${soldOut ? 'opacity-60' : 'hover:scale-[1.02]'} transition-transform`}>
+                        {(r.description || r.description_bg) && (
+                          <button type="button" onClick={() => setRewardInfoModal(r)} aria-label={`${lang === 'bg' && r.title_bg ? r.title_bg : r.title} — info`}
+                                  className={`absolute top-3 right-3 p-2 ${th.chip} text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors`}>
+                            <Info size={18} aria-hidden="true" />
+                          </button>
+                        )}
                         <span className="text-6xl" aria-hidden="true">{r.icon || '🎁'}</span>
                         <p className="font-bold text-slate-800 dark:text-slate-100 text-lg leading-tight">{lang === 'bg' && r.title_bg ? r.title_bg : r.title}</p>
                         <p className={`font-black text-2xl ${th.accentText}`}>{r.cost} <span className="text-sm">{t.points.toLowerCase()}</span></p>
@@ -1576,9 +1725,9 @@ export default function App() {
                     <>
                       <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2 mt-4 mb-2"><Leaf size={20} className="text-emerald-500" aria-hidden="true" /> {t.environmentalImpact}</h2>
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <div className={`bg-emerald-500 ${th.card} p-6 text-white shadow-md relative overflow-hidden`}><Cloud size={80} className="absolute -bottom-4 -right-4 opacity-20" aria-hidden="true" /><h3 className="font-semibold text-emerald-100 flex items-center gap-2"><Cloud size={16} aria-hidden="true" /> {t.co2Saved}</h3><p className="text-3xl font-black mt-2">{my.co2.toFixed(1)} <span className="text-lg">kg</span></p><p className="text-xs text-emerald-100/90 mt-1 flex items-center gap-1"><Car size={12} aria-hidden="true" /> ≈ {Math.round(my.co2 * EQUIV.kmPerKgCo2)} {t.eqKm}</p></div>
-                        <div className={`bg-blue-500 ${th.card} p-6 text-white shadow-md relative overflow-hidden`}><Droplets size={80} className="absolute -bottom-4 -right-4 opacity-20" aria-hidden="true" /><h3 className="font-semibold text-blue-100 flex items-center gap-2"><Droplets size={16} aria-hidden="true" /> {t.waterSaved}</h3><p className="text-3xl font-black mt-2">{my.water.toFixed(1)} <span className="text-lg">L</span></p><p className="text-xs text-blue-100/90 mt-1 flex items-center gap-1"><ShowerHead size={12} aria-hidden="true" /> ≈ {Math.round(my.water * EQUIV.showersPerL)} {t.eqShowers}</p></div>
-                        <div className={`bg-amber-500 ${th.card} p-6 text-white shadow-md relative overflow-hidden`}><Zap size={80} className="absolute -bottom-4 -right-4 opacity-20" aria-hidden="true" /><h3 className="font-semibold text-amber-100 flex items-center gap-2"><Zap size={16} aria-hidden="true" /> {t.energySaved}</h3><p className="text-3xl font-black mt-2">{my.energy.toFixed(1)} <span className="text-lg">kWh</span></p><p className="text-xs text-amber-100/90 mt-1 flex items-center gap-1"><BatteryCharging size={12} aria-hidden="true" /> ≈ {Math.round(my.energy * EQUIV.chargesPerKwh)} {t.eqCharges}</p></div>
+                        <button type="button" onClick={() => setImpactModal({ metric: 'co2', matCounts })} className={`text-left w-full bg-emerald-500 ${th.card} p-6 text-white shadow-md relative overflow-hidden hover:shadow-lg hover:scale-[1.01] transition-all`}><Cloud size={80} className="absolute -bottom-4 -right-4 opacity-20" aria-hidden="true" /><h3 className="font-semibold text-emerald-100 flex items-center gap-2"><Cloud size={16} aria-hidden="true" /> {t.co2Saved}</h3><p className="text-3xl font-black mt-2">{my.co2.toFixed(1)} <span className="text-lg">kg</span></p><p className="text-xs text-emerald-100/90 mt-1 flex items-center gap-1"><Car size={12} aria-hidden="true" /> ≈ {Math.round(my.co2 * EQUIV.kmPerKgCo2)} {t.eqKm}</p></button>
+                        <button type="button" onClick={() => setImpactModal({ metric: 'water', matCounts })} className={`text-left w-full bg-blue-500 ${th.card} p-6 text-white shadow-md relative overflow-hidden hover:shadow-lg hover:scale-[1.01] transition-all`}><Droplets size={80} className="absolute -bottom-4 -right-4 opacity-20" aria-hidden="true" /><h3 className="font-semibold text-blue-100 flex items-center gap-2"><Droplets size={16} aria-hidden="true" /> {t.waterSaved}</h3><p className="text-3xl font-black mt-2">{my.water.toFixed(1)} <span className="text-lg">L</span></p><p className="text-xs text-blue-100/90 mt-1 flex items-center gap-1"><ShowerHead size={12} aria-hidden="true" /> ≈ {Math.round(my.water * EQUIV.showersPerL)} {t.eqShowers}</p></button>
+                        <button type="button" onClick={() => setImpactModal({ metric: 'energy', matCounts })} className={`text-left w-full bg-amber-500 ${th.card} p-6 text-white shadow-md relative overflow-hidden hover:shadow-lg hover:scale-[1.01] transition-all`}><Zap size={80} className="absolute -bottom-4 -right-4 opacity-20" aria-hidden="true" /><h3 className="font-semibold text-amber-100 flex items-center gap-2"><Zap size={16} aria-hidden="true" /> {t.energySaved}</h3><p className="text-3xl font-black mt-2">{my.energy.toFixed(1)} <span className="text-lg">kWh</span></p><p className="text-xs text-amber-100/90 mt-1 flex items-center gap-1"><BatteryCharging size={12} aria-hidden="true" /> ≈ {Math.round(my.energy * EQUIV.chargesPerKwh)} {t.eqCharges}</p></button>
                       </div>
 
                       <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2 mt-6 mb-2"><Badge size={20} className={th.accentText} aria-hidden="true" /> {t.achievements}</h2>
@@ -1633,17 +1782,6 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* GDPR: Privacy & data */}
-                    <div className={`${cardCls} overflow-hidden`}>
-                      <div className={`${th.cardPad} border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50`}><h2 className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><ShieldCheck size={18} className={th.accentText} aria-hidden="true" /> {t.privacyTitle}</h2></div>
-                      <div className={th.cardPad}>
-                        <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">{t.privacyDesc}</p>
-                        <div className="flex flex-col sm:flex-row gap-3">
-                          <button type="button" onClick={() => setGdprModal({ mode: 'export', pass: '', busy: false })} className={`flex-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700/50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold p-3 ${th.btnShape} transition-colors flex items-center justify-center gap-2`}><FileDown size={16} aria-hidden="true" /> {t.downloadData}</button>
-                          <button type="button" onClick={() => setGdprModal({ mode: 'delete', pass: '', busy: false })} className={`flex-1 bg-rose-50 hover:bg-rose-100 dark:bg-rose-900/30 dark:hover:bg-rose-900/50 text-rose-600 dark:text-rose-400 font-bold p-3 ${th.btnShape} transition-colors flex items-center justify-center gap-2`}><UserX size={16} aria-hidden="true" /> {t.deleteAccount}</button>
-                        </div>
-                      </div>
-                    </div>
                   </div>
 
                   {/* Feedback */}
@@ -1656,6 +1794,18 @@ export default function App() {
                         {!sessionPassword && <input type="password" required maxLength={128} placeholder={t.confirmPass} aria-label={t.confirmPass} className={`w-full p-4 ${th.input} border border-rose-200 dark:border-rose-700/50 bg-rose-50 dark:bg-rose-900/20 text-rose-800 dark:text-rose-100 focus:ring-2 focus:ring-rose-500 outline-none transition-colors mb-4`} value={feedbackConfirmPass} onChange={e => setFeedbackConfirmPass(e.target.value)} />}
                         <button type="submit" className={`w-full ${btnPrimary} p-4`}>{t.sendFeedback}</button>
                       </form>
+                    </div>
+                  </div>
+
+                  {/* GDPR: Privacy & data — full width, always the last card */}
+                  <div className={`${cardCls} overflow-hidden lg:col-span-2`}>
+                    <div className={`${th.cardPad} border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50`}><h2 className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><ShieldCheck size={18} className={th.accentText} aria-hidden="true" /> {t.privacyTitle}</h2></div>
+                    <div className={th.cardPad}>
+                      <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">{t.privacyDesc}</p>
+                      <div className="flex flex-col sm:flex-row gap-3">
+                        <button type="button" onClick={() => setGdprModal({ mode: 'export', pass: '', busy: false })} className={`flex-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700/50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold p-3 ${th.btnShape} transition-colors flex items-center justify-center gap-2`}><FileDown size={16} aria-hidden="true" /> {t.downloadData}</button>
+                        <button type="button" onClick={() => setGdprModal({ mode: 'delete', pass: '', busy: false })} className={`flex-1 bg-rose-50 hover:bg-rose-100 dark:bg-rose-900/30 dark:hover:bg-rose-900/50 text-rose-600 dark:text-rose-400 font-bold p-3 ${th.btnShape} transition-colors flex items-center justify-center gap-2`}><UserX size={16} aria-hidden="true" /> {t.deleteAccount}</button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1683,7 +1833,7 @@ export default function App() {
               <div className={`${th.sectionGap} animate-fade-in pb-24 md:pb-0`}>
                 <div className={`bg-slate-800 dark:bg-slate-900 ${th.card} p-4 flex flex-wrap items-center gap-3 text-slate-200 shadow-lg`}>
                   <Server size={20} className="text-indigo-400" aria-hidden="true" />
-                  <div className="flex-1 min-w-[150px]"><h4 className="font-bold text-sm">{t.dbConnection}</h4><p className="text-xs text-slate-400">{isConnected ? t.connected2Way : (connectionState === 'connecting' ? t.connecting : t.disconnected)}</p></div>
+                  <div className="flex-1 min-w-[150px]"><h4 className="font-bold text-sm">{t.dbConnection}</h4><p className="text-xs text-slate-400">{isConnected ? t.connected2Way : (connectionState === 'connecting' ? t.connecting : t.disconnected)}</p><p className="text-[10px] text-slate-500 font-mono mt-0.5">ui {FRONTEND_BUILD} · core {backendBuild || '?'}</p></div>
                   <label className="text-xs flex items-center gap-2 text-slate-300 font-semibold">
                     {t.orgType}
                     <select value={orgType} onChange={handleOrgChange} className="bg-slate-700 text-slate-200 rounded-lg px-2 py-1.5 outline-none" aria-label={t.orgType}>
@@ -1737,12 +1887,14 @@ export default function App() {
                 <div className={`${cardCls} ${th.cardPad}`}>
                   <h2 className="text-lg md:text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2 mb-6"><Gift className={th.accentText} aria-hidden="true" /> {t.manageRewards}</h2>
                   <form onSubmit={submitNewReward} className="grid grid-cols-2 md:grid-cols-6 gap-3 items-end mb-6">
-                    <div className="space-y-1 col-span-2 md:col-span-2"><label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t.rewardTitleEn}</label><input type="text" required maxLength={64} className={`${inputCls} p-3 h-12`} value={rewardForm.title} onChange={e => setRewardForm({ ...rewardForm, title: e.target.value })} /></div>
-                    <div className="space-y-1 col-span-2 md:col-span-1"><label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t.rewardTitleBg}</label><input type="text" maxLength={64} className={`${inputCls} p-3 h-12`} value={rewardForm.title_bg} onChange={e => setRewardForm({ ...rewardForm, title_bg: e.target.value })} /></div>
-                    <div className="space-y-1"><label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t.points}</label><input type="number" required min="1" className={`${inputCls} p-3 h-12`} value={rewardForm.cost} onChange={e => setRewardForm({ ...rewardForm, cost: e.target.value })} /></div>
-                    <div className="space-y-1"><label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t.rewardStock}</label><input type="number" min="-1" className={`${inputCls} p-3 h-12`} value={rewardForm.stock} onChange={e => setRewardForm({ ...rewardForm, stock: e.target.value })} /></div>
-                    <div className="space-y-1"><label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t.rewardIcon}</label><input type="text" maxLength={4} className={`${inputCls} p-3 h-12 text-center`} value={rewardForm.icon} onChange={e => setRewardForm({ ...rewardForm, icon: e.target.value })} /></div>
-                    <button type="submit" className={`${btnPrimary} p-3 h-12 flex items-center justify-center gap-2 col-span-2 md:col-span-6 lg:col-span-1`}><UserPlus size={18} aria-hidden="true" /> {t.addReward}</button>
+                    <div className="space-y-1 col-span-2 md:col-span-2"><label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t.rewardTitleEn}</label><input type="text" required maxLength={64} className={inputSm} value={rewardForm.title} onChange={e => setRewardForm({ ...rewardForm, title: e.target.value })} /></div>
+                    <div className="space-y-1 col-span-2 md:col-span-1"><label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t.rewardTitleBg}</label><input type="text" maxLength={64} className={inputSm} value={rewardForm.title_bg} onChange={e => setRewardForm({ ...rewardForm, title_bg: e.target.value })} /></div>
+                    <div className="space-y-1"><label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t.points}</label><input type="number" required min="1" className={inputSm} value={rewardForm.cost} onChange={e => setRewardForm({ ...rewardForm, cost: e.target.value })} /></div>
+                    <div className="space-y-1"><label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t.rewardStock}</label><input type="number" min="-1" className={inputSm} value={rewardForm.stock} onChange={e => setRewardForm({ ...rewardForm, stock: e.target.value })} /></div>
+                    <div className="space-y-1"><label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t.rewardIcon}</label><input type="text" maxLength={4} className={`${inputSm} text-center`} value={rewardForm.icon} onChange={e => setRewardForm({ ...rewardForm, icon: e.target.value })} /></div>
+                    <div className="space-y-1 col-span-2 md:col-span-3"><label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t.rewardDescEn}</label><input type="text" maxLength={200} className={inputSm} value={rewardForm.description} onChange={e => setRewardForm({ ...rewardForm, description: e.target.value })} /></div>
+                    <div className="space-y-1 col-span-2 md:col-span-3"><label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t.rewardDescBg}</label><input type="text" maxLength={200} className={inputSm} value={rewardForm.description_bg} onChange={e => setRewardForm({ ...rewardForm, description_bg: e.target.value })} /></div>
+                    <button type="submit" className={`${btnPrimary} p-3 h-12 flex items-center justify-center gap-2 col-span-2 md:col-span-6`}><UserPlus size={18} aria-hidden="true" /> {t.addReward}</button>
                   </form>
                   <div className="space-y-2">
                     {rewards.map(r => (
@@ -1779,11 +1931,11 @@ export default function App() {
                     <div className={`${cardCls} ${th.cardPad}`}>
                       <h2 className="text-lg md:text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2 mb-6"><ShieldCheck className={th.accentText} aria-hidden="true" /> {t.adminAccounts}</h2>
                       <form onSubmit={submitNewAdmin} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end mb-6">
-                        <div className="space-y-1"><label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t.username}</label><input type="text" required maxLength={32} placeholder="admin2" className={`${inputCls} p-3 h-12`} value={newAdminForm.username} onChange={e => setNewAdminForm({ ...newAdminForm, username: e.target.value })} /></div>
-                        <div className="space-y-1"><label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t.password}</label><input type="password" required maxLength={128} placeholder="***" className={`${inputCls} p-3 h-12`} value={newAdminForm.password} onChange={e => setNewAdminForm({ ...newAdminForm, password: e.target.value })} /></div>
+                        <div className="space-y-1"><label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t.username}</label><input type="text" required maxLength={32} placeholder="admin2" className={inputSm} value={newAdminForm.username} onChange={e => setNewAdminForm({ ...newAdminForm, username: e.target.value })} /></div>
+                        <div className="space-y-1"><label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t.password}</label><input type="password" required maxLength={128} placeholder="***" className={inputSm} value={newAdminForm.password} onChange={e => setNewAdminForm({ ...newAdminForm, password: e.target.value })} /></div>
                         <div className="space-y-1">
                           <label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t.role}</label>
-                          <select className={`${inputCls} p-3 h-12`} value={newAdminForm.role} onChange={e => setNewAdminForm({ ...newAdminForm, role: e.target.value })}>
+                          <select className={inputSm} value={newAdminForm.role} onChange={e => setNewAdminForm({ ...newAdminForm, role: e.target.value })}>
                             <option value="org">{t.roleOrg}</option>
                             <option value="super">{t.roleSuper}</option>
                           </select>
@@ -1819,8 +1971,8 @@ export default function App() {
                               <div className="border-l border-slate-200 dark:border-slate-700 pl-3"><p className="text-[10px] text-amber-500 dark:text-amber-400 font-bold uppercase mb-1">{t.requested}</p><p className="font-semibold text-amber-700 dark:text-amber-300">{edit.new_name}</p><p className="text-xs text-amber-600 dark:text-amber-400/80">{edit.new_department}</p></div>
                             </div>
                             <div className="flex gap-2 mt-1">
-                              <button type="button" onClick={() => mqttClientRef.current?.publish(`${NS}/profile_edit/resolve`, JSON.stringify({ action: 'approve', code: edit.code, admin_token: adminToken }))} className={`flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2 ${th.btnShape} text-sm font-bold shadow-sm transition-colors`}>{t.approve}</button>
-                              <button type="button" onClick={() => mqttClientRef.current?.publish(`${NS}/profile_edit/resolve`, JSON.stringify({ action: 'reject', code: edit.code, admin_token: adminToken }))} className={`flex-1 bg-rose-100 hover:bg-rose-200 text-rose-700 dark:bg-rose-900/40 dark:hover:bg-rose-900/60 dark:text-rose-400 py-2 ${th.btnShape} text-sm font-bold transition-colors`}>{t.reject}</button>
+                              <button type="button" onClick={() => pub(`${NS}/profile_edit/resolve`, JSON.stringify({ action: 'approve', code: edit.code, admin_token: adminToken }))} className={`flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2 ${th.btnShape} text-sm font-bold shadow-sm transition-colors`}>{t.approve}</button>
+                              <button type="button" onClick={() => pub(`${NS}/profile_edit/resolve`, JSON.stringify({ action: 'reject', code: edit.code, admin_token: adminToken }))} className={`flex-1 bg-rose-100 hover:bg-rose-200 text-rose-700 dark:bg-rose-900/40 dark:hover:bg-rose-900/60 dark:text-rose-400 py-2 ${th.btnShape} text-sm font-bold transition-colors`}>{t.reject}</button>
                             </div>
                           </div>
                         );
@@ -1845,9 +1997,9 @@ export default function App() {
                   <h2 className="text-lg md:text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2 mb-6"><Settings className={th.accentText} aria-hidden="true" /> {t.manageProfiles}</h2>
                   {adminMessage && <div className={`mb-6 p-4 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 ${th.card} flex items-center gap-2 text-sm font-semibold animate-fade-in`} role="status" aria-live="polite"><CheckCircle2 size={18} aria-hidden="true" /> {adminMessage}</div>}
                   <form onSubmit={handleAdminSave} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-                    <div className="space-y-1"><label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t.userCode}</label><input type="text" required maxLength={32} placeholder="1234" className={`${inputCls} p-3 h-12`} value={adminForm.code} onChange={e => setAdminForm({ ...adminForm, code: e.target.value })} /></div>
-                    <div className="space-y-1"><label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t.fullName}</label><input type="text" required maxLength={64} placeholder="Jane Doe" className={`${inputCls} p-3 h-12`} value={adminForm.name} onChange={e => setAdminForm({ ...adminForm, name: e.target.value })} /></div>
-                    <div className="space-y-1"><label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{deptLabel}</label><input type="text" maxLength={64} placeholder="…" className={`${inputCls} p-3 h-12`} value={adminForm.department} onChange={e => setAdminForm({ ...adminForm, department: e.target.value })} /></div>
+                    <div className="space-y-1"><label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t.userCode}</label><input type="text" required maxLength={32} placeholder="1234" className={inputSm} value={adminForm.code} onChange={e => setAdminForm({ ...adminForm, code: e.target.value })} /></div>
+                    <div className="space-y-1"><label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t.fullName}</label><input type="text" required maxLength={64} placeholder="Jane Doe" className={inputSm} value={adminForm.name} onChange={e => setAdminForm({ ...adminForm, name: e.target.value })} /></div>
+                    <div className="space-y-1"><label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{deptLabel}</label><input type="text" maxLength={64} placeholder="…" className={inputSm} value={adminForm.department} onChange={e => setAdminForm({ ...adminForm, department: e.target.value })} /></div>
                     <button type="submit" className={`${btnPrimary} p-3 h-12 flex items-center justify-center gap-2`}><UserPlus size={18} aria-hidden="true" /> {t.save}</button>
                   </form>
                 </div>
@@ -1900,7 +2052,7 @@ export default function App() {
                           <p className="text-[10px] text-slate-400 mt-2">{parseTimestamp(fb.timestamp).toLocaleString()}</p>
                         </div>
                         {adminRole === 'super' && (
-                          <button type="button" onClick={() => mqttClientRef.current?.publish(`${NS}/feedback/delete`, JSON.stringify({ id: fb.id, admin_token: adminToken }))} aria-label="Delete feedback" className="text-slate-400 hover:text-rose-500 self-start p-2 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-900/30 transition-colors"><Trash2 size={16} aria-hidden="true" /></button>
+                          <button type="button" onClick={() => pub(`${NS}/feedback/delete`, JSON.stringify({ id: fb.id, admin_token: adminToken }))} aria-label="Delete feedback" className="text-slate-400 hover:text-rose-500 self-start p-2 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-900/30 transition-colors"><Trash2 size={16} aria-hidden="true" /></button>
                         )}
                       </div>
                     ))}
