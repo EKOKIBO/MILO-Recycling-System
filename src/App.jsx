@@ -6,7 +6,8 @@ import {
   Download, Edit2, Clock, CheckCircle2, XCircle, Smartphone, Server, Eraser, Globe,
   AlertTriangle, MessageSquare, LogOut, Check, ChevronRight, UserCircle, Loader2, Key, Info,
   Leaf, Recycle, Globe2, Cloud, Droplets, Medal, Star, Badge,
-  Gift, Bell, FileDown, UserX, Timer, Car, ShowerHead, BatteryCharging, Flag, Sparkles
+  Gift, Bell, FileDown, UserX, Timer, Car, ShowerHead, BatteryCharging, Flag, Sparkles,
+  Wrench, Camera, RefreshCw, Fan
 } from 'lucide-react';
 
 // ==========================================
@@ -23,7 +24,7 @@ const MQTT_PASS = import.meta.env?.VITE_MQTT_PASS || 'goodboy_f@g&gay';
 // the private half lives ONLY on the Pi as MILO_VAPID_PRIVATE_KEY).
 const VAPID_PUBLIC_KEY = import.meta.env?.VITE_VAPID_PUBLIC_KEY || 'BFEREDv8zD4h3UumMdzp-aV4S7KusQAlb_0ihjhh72A3_y-dYtvaEYuNfHGqRzGbvVdZu2kdFlwwCT1jJVUXZvg';
 const NS = 'milo_v2_system';
-const FRONTEND_BUILD = '2026-07-05.2'; // shown in the admin bar next to the backend build
+const FRONTEND_BUILD = '2026-07-05.4'; // shown in the admin bar next to the backend build
 
 // Illustrative per-item averages (kg CO2, litres water, kWh energy saved vs virgin
 // production). Sources vary widely; keep these as motivational estimates.
@@ -152,6 +153,16 @@ const translations = {
     pubDenied: "Broker rejected publish to",
     confirmDeleteReward: "Remove this reward from the catalog? Past redemptions are kept.",
     rewardDescEn: "Description (EN, optional)", rewardDescBg: "Description (BG, optional)",
+    maintTitle: "Maintenance Mode", maintEnter: "Enter maintenance", maintExit: "Exit maintenance",
+    maintWarning: "Machine display is on the maintenance page and user sessions are paused. Auto-exits after 2 minutes without commands.",
+    maintCamera: "Inference Camera", maintCapture: "Capture", maintAuto: "Auto refresh",
+    maintNoFrame: "No frame yet — press Capture.", maintSnapErr: "Snapshot failed:",
+    maintSnapTimeout: "No frame arrived — the vision pipeline may be down.",
+    maintMotors: "Motor Jog", maintMotor: "Motor", maintSteps: "steps",
+    maintSerialErr: "Serial link to the machine is down.", maintDetections: "detections",
+    maintFans: "Fans", fanOnLabel: "On", fanOffLabel: "Off",
+    fan1Error: "Fan 1 stalled (tachometer silent) — cooling compromised",
+    fan2Error: "Fan 2 stalled (tachometer silent) — cooling compromised",
   },
   bg: {
     appTitle: "Смарт Рециклиране", dashboard: "Табло", admin: "Админ", userHub: "Моят Профил", about: "За нас", rewardsTab: "Награди",
@@ -205,6 +216,16 @@ const translations = {
     pubDenied: "Брокерът отказа публикуване към",
     confirmDeleteReward: "Премахване на тази награда от каталога? Минали заявки се запазват.",
     rewardDescEn: "Описание (EN, по избор)", rewardDescBg: "Описание (BG, по избор)",
+    maintTitle: "Режим Поддръжка", maintEnter: "Влез в поддръжка", maintExit: "Излез от поддръжка",
+    maintWarning: "Дисплеят на машината е на страница за поддръжка и потребителските сесии са спрени. Излиза автоматично след 2 минути без команди.",
+    maintCamera: "Камера с Разпознаване", maintCapture: "Снимка", maintAuto: "Автообновяване",
+    maintNoFrame: "Още няма кадър — натиснете Снимка.", maintSnapErr: "Снимката се провали:",
+    maintSnapTimeout: "Не пристигна кадър — визията може да не работи.",
+    maintMotors: "Тестване на Моторите", maintMotor: "Мотор", maintSteps: "стъпки",
+    maintSerialErr: "Серийната връзка с машината е прекъсната.", maintDetections: "разпознавания",
+    maintFans: "Вентилатори", fanOnLabel: "Вкл", fanOffLabel: "Изкл",
+    fan1Error: "Вентилатор 1 е блокирал (няма тахо сигнал) — охлаждането е нарушено",
+    fan2Error: "Вентилатор 2 е блокирал (няма тахо сигнал) — охлаждането е нарушено",
   }
 };
 
@@ -365,6 +386,12 @@ export default function App() {
   const [installPrompt, setInstallPrompt] = useState(null); // captured beforeinstallprompt
   const [backendBuild, setBackendBuild] = useState(null);   // reported via config/list
   const [rewardInfoModal, setRewardInfoModal] = useState(null); // reward whose description is shown
+  const [maintMode, setMaintMode] = useState(false);
+  const [snapshot, setSnapshot] = useState(null);        // { src, ts, detections } | { error }
+  const [snapshotPending, setSnapshotPending] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [jogMotor, setJogMotor] = useState(1);
+  const [fanStates, setFanStates] = useState([true, true]); // maintenance manual fan control
 
   // Queues & Modals
   const [popupQueue, setPopupQueue] = useState([]);
@@ -382,6 +409,8 @@ export default function App() {
   const pendingRedeemRef = useRef(null);
   const pendingGdprRef = useRef(null);
   const toastTimerRef = useRef(null);
+  const pendingSnapRef = useRef(null);      // timeoutId of an in-flight snapshot
+  const requestSnapshotRef = useRef(null);  // latest requestSnapshot for the auto-refresh interval
 
   // Stable per-connection client id: scopes our private reply topic AND must
   // equal the MQTT client id (broker ACL: pattern read reply/%c/#).
@@ -589,6 +618,24 @@ export default function App() {
                 window.URL.revokeObjectURL(url);
               } else {
                 setToast({ msg: tt.incorrectPass, type: 'err' });
+                setTimeout(() => setToast(null), 4000);
+              }
+              break;
+            }
+            case 'snapshot': {
+              if (pendingSnapRef.current) { clearTimeout(pendingSnapRef.current); pendingSnapRef.current = null; }
+              setSnapshotPending(false);
+              if (data.success) {
+                setSnapshot({ src: `data:image/jpeg;base64,${data.jpeg_b64}`, ts: data.ts, detections: data.detections });
+              } else {
+                setSnapshot({ error: data.reason });
+              }
+              break;
+            }
+            case 'maint': {
+              if (data.ok === false) {
+                const reasonMap = { serial: tt.maintSerialErr, auth: tt.incorrectPass, range: 'range' };
+                setToast({ msg: reasonMap[data.reason] || data.reason, type: 'err' });
                 setTimeout(() => setToast(null), 4000);
               }
               break;
@@ -1011,6 +1058,55 @@ export default function App() {
       code: loggedInUser, user_password: pw, client_id: clientIdRef.current
     }));
   };
+
+  // --- Maintenance mode ---
+  const setMachineMaint = (enabled) => {
+    pub(`${NS}/maintenance/mode`, JSON.stringify({ enabled, admin_token: adminToken, client_id: clientIdRef.current }));
+    setMaintMode(enabled);
+    if (enabled) setFanStates([true, true]); // firmware defaults both fans ON in maintenance
+    if (!enabled) { setAutoRefresh(false); setSnapshot(null); }
+  };
+
+  const toggleFan = (idx) => {
+    const next = [...fanStates];
+    next[idx] = !next[idx];
+    setFanStates(next);
+    pub(`${NS}/maintenance/fan`, JSON.stringify({ fan: idx + 1, on: next[idx], admin_token: adminToken, client_id: clientIdRef.current }));
+  };
+
+  const requestSnapshot = () => {
+    if (pendingSnapRef.current) return; // one in flight at a time
+    setSnapshotPending(true);
+    pendingSnapRef.current = setTimeout(() => {
+      pendingSnapRef.current = null;
+      setSnapshotPending(false);
+      setSnapshot({ error: 'timeout' });
+    }, 8000);
+    pub(`${NS}/maintenance/snapshot`, JSON.stringify({ admin_token: adminToken, client_id: clientIdRef.current }));
+  };
+  requestSnapshotRef.current = requestSnapshot;
+
+  const jog = (steps) => {
+    pub(`${NS}/maintenance/jog`, JSON.stringify({ motor: jogMotor, steps, admin_token: adminToken, client_id: clientIdRef.current }));
+  };
+
+  // Auto-refresh the inference view every 3s while enabled (pseudo-live feed).
+  useEffect(() => {
+    if (!maintMode || !autoRefresh) return;
+    const id = setInterval(() => requestSnapshotRef.current?.(), 3000);
+    return () => clearInterval(id);
+  }, [maintMode, autoRefresh]);
+
+  // Leaving the admin tab or logging out ends maintenance so the machine
+  // display returns to normal (the backend watchdog is the fallback).
+  useEffect(() => {
+    if (maintMode && (activeTab !== 'admin' || !isAdminAuthenticated)) {
+      if (adminToken) {
+        pub(`${NS}/maintenance/mode`, JSON.stringify({ enabled: false, admin_token: adminToken, client_id: clientIdRef.current }));
+      }
+      setMaintMode(false); setAutoRefresh(false);
+    }
+  }, [activeTab, isAdminAuthenticated, maintMode, adminToken]);
 
   // --- Admin secure actions ---
   const executeConfirmedAction = () => {
@@ -1921,11 +2017,95 @@ export default function App() {
                           {Object.entries(hardwareErrors).map(([errName, errTimestamp]) => (
                             <div key={errName} className={`p-4 bg-rose-50 dark:bg-rose-900/20 text-rose-700 dark:text-rose-400 ${th.card} border border-rose-200 dark:border-rose-800 flex items-start gap-3 text-sm font-semibold animate-shake`} role="alert">
                               <AlertTriangle size={18} className="mt-0.5 shrink-0" aria-hidden="true" />
-                              <div><p>{(errName || "").includes("FAN_STALL") ? t.fanError : errName}</p><p className="text-xs text-rose-500/70 mt-1 font-normal">{parseTimestamp(errTimestamp).toLocaleString()}</p></div>
+                              <div><p>{(errName || "").includes("FAN1_STALL") ? t.fan1Error : (errName || "").includes("FAN2_STALL") ? t.fan2Error : (errName || "").includes("FAN_STALL") ? t.fanError : errName}</p><p className="text-xs text-rose-500/70 mt-1 font-normal">{parseTimestamp(errTimestamp).toLocaleString()}</p></div>
                             </div>
                           ))}
                         </div>
                       )}
+
+                      {/* --- Maintenance mode: live inference view + motor jog --- */}
+                      <div className="mt-6 pt-6 border-t border-slate-200 dark:border-slate-700">
+                        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                          <h3 className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><Wrench size={18} className={th.accentText} aria-hidden="true" /> {t.maintTitle}</h3>
+                          <button type="button" onClick={() => setMachineMaint(!maintMode)} disabled={!isConnected}
+                                  className={`${maintMode ? 'bg-rose-600 hover:bg-rose-700 text-white' : th.accentBtn} ${th.btnShape} font-bold px-4 py-2 text-sm transition-colors disabled:opacity-50`}>
+                            {maintMode ? t.maintExit : t.maintEnter}
+                          </button>
+                        </div>
+
+                        {maintMode && (
+                          <div className="animate-fade-in space-y-4">
+                            <div className={`p-3 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 ${th.card} border border-amber-200 dark:border-amber-800 flex items-start gap-2 text-xs font-semibold`}>
+                              <AlertTriangle size={16} className="shrink-0 mt-0.5" aria-hidden="true" /> {t.maintWarning}
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              {/* Camera / inference view */}
+                              <div className={`bg-slate-50 dark:bg-slate-900/50 ${th.card} border border-slate-200 dark:border-slate-700 p-4`}>
+                                <div className="flex items-center justify-between gap-2 mb-3">
+                                  <h4 className="font-bold text-sm text-slate-700 dark:text-slate-200 flex items-center gap-2"><Camera size={16} className={th.accentText} aria-hidden="true" /> {t.maintCamera}</h4>
+                                  <div className="flex gap-2">
+                                    <button type="button" onClick={requestSnapshot} disabled={snapshotPending} className={`${th.accentBtn} ${th.btnShape} px-3 py-1.5 text-xs font-bold flex items-center gap-1.5 disabled:opacity-50`}>
+                                      {snapshotPending ? <Loader2 size={13} className="animate-spin" /> : <Camera size={13} aria-hidden="true" />} {t.maintCapture}
+                                    </button>
+                                    <button type="button" onClick={() => setAutoRefresh(!autoRefresh)} aria-pressed={autoRefresh}
+                                            className={`${autoRefresh ? th.accentSoft : 'bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-300'} ${th.btnShape} px-3 py-1.5 text-xs font-bold flex items-center gap-1.5`}>
+                                      <RefreshCw size={13} className={autoRefresh ? 'animate-spin' : ''} style={autoRefresh ? { animationDuration: '3s' } : undefined} aria-hidden="true" /> {t.maintAuto}
+                                    </button>
+                                  </div>
+                                </div>
+                                <div className={`aspect-video bg-slate-900 ${th.card} overflow-hidden flex items-center justify-center relative`}>
+                                  {snapshot?.src ? (
+                                    <img src={snapshot.src} alt={t.maintCamera} className="w-full h-full object-contain" />
+                                  ) : (
+                                    <p className="text-slate-500 text-xs px-4 text-center">
+                                      {snapshot?.error
+                                        ? `${t.maintSnapErr} ${snapshot.error === 'timeout' ? t.maintSnapTimeout : snapshot.error}`
+                                        : t.maintNoFrame}
+                                    </p>
+                                  )}
+                                </div>
+                                {snapshot?.ts && (
+                                  <p className="text-[10px] text-slate-400 mt-2 font-mono">{parseTimestamp(snapshot.ts).toLocaleTimeString()} · {snapshot.detections} {t.maintDetections}</p>
+                                )}
+                              </div>
+
+                              {/* Motor jog */}
+                              <div className={`bg-slate-50 dark:bg-slate-900/50 ${th.card} border border-slate-200 dark:border-slate-700 p-4`}>
+                                <h4 className="font-bold text-sm text-slate-700 dark:text-slate-200 flex items-center gap-2 mb-3"><Settings size={16} className={th.accentText} aria-hidden="true" /> {t.maintMotors}</h4>
+                                <div className="flex flex-wrap gap-2 mb-4" role="radiogroup" aria-label={t.maintMotor}>
+                                  {[1, 2, 3, 4].map(m => (
+                                    <button key={m} type="button" role="radio" aria-checked={jogMotor === m} onClick={() => setJogMotor(m)}
+                                            className={`${jogMotor === m ? th.accentSoft : 'bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-300'} ${th.btnShape} px-4 py-2 text-sm font-bold transition-colors`}>
+                                      {t.maintMotor} {m}
+                                    </button>
+                                  ))}
+                                </div>
+                                <div className="grid grid-cols-4 gap-2">
+                                  {[-10, -1, 1, 10].map(s => (
+                                    <button key={s} type="button" onClick={() => jog(s)} disabled={!isConnected}
+                                            className={`${th.accentBtn} ${th.btnShape} py-3 font-black text-lg disabled:opacity-50`}>
+                                      {s > 0 ? `+${s}` : s}
+                                    </button>
+                                  ))}
+                                </div>
+                                <p className="text-[11px] text-slate-400 mt-3">{t.maintMotor} {jogMotor} · ±1 / ±10 {t.maintSteps}</p>
+
+                                <h4 className="font-bold text-sm text-slate-700 dark:text-slate-200 flex items-center gap-2 mt-5 mb-3"><Fan size={16} className={th.accentText} aria-hidden="true" /> {t.maintFans}</h4>
+                                <div className="grid grid-cols-2 gap-2">
+                                  {[0, 1].map(i => (
+                                    <button key={i} type="button" onClick={() => toggleFan(i)} disabled={!isConnected} aria-pressed={fanStates[i]}
+                                            className={`${fanStates[i] ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-300 dark:hover:bg-slate-600'} ${th.btnShape} py-3 font-bold text-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-50`}>
+                                      <Fan size={16} className={fanStates[i] ? 'animate-spin' : ''} style={fanStates[i] ? { animationDuration: '1.2s' } : undefined} aria-hidden="true" />
+                                      {t.maintFans.slice(0, -1) || 'Fan'} {i + 1}: {fanStates[i] ? t.fanOnLabel : t.fanOffLabel}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     <div className={`${cardCls} ${th.cardPad}`}>
