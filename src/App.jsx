@@ -24,7 +24,7 @@ const MQTT_PASS = import.meta.env?.VITE_MQTT_PASS || 'goodboy_f@g&gay';
 // the private half lives ONLY on the Pi as MILO_VAPID_PRIVATE_KEY).
 const VAPID_PUBLIC_KEY = import.meta.env?.VITE_VAPID_PUBLIC_KEY || 'BFEREDv8zD4h3UumMdzp-aV4S7KusQAlb_0ihjhh72A3_y-dYtvaEYuNfHGqRzGbvVdZu2kdFlwwCT1jJVUXZvg';
 const NS = 'milo_v2_system';
-const FRONTEND_BUILD = '2026-07-05.4'; // shown in the admin bar next to the backend build
+const FRONTEND_BUILD = '2026-07-18.2'; // shown in the admin bar next to the backend build
 
 // Illustrative per-item averages (kg CO2, litres water, kWh energy saved vs virgin
 // production). Sources vary widely; keep these as motivational estimates.
@@ -34,8 +34,8 @@ const IMPACT = {
   tin:     { co2: 0.20, water: 0.8, energy: 0.95 },
   paper:   { co2: 0.05, water: 2.0, energy: 0.30 },
 };
-// Relatable equivalents: 0.12 kg CO2 per km driven, ~50 L per shower, ~0.012 kWh per phone charge.
-const EQUIV = { kmPerKgCo2: 1 / 0.12, showersPerL: 1 / 50, chargesPerKwh: 1 / 0.012 };
+// Relatable equivalents (0.12 kg CO2/km, 50 L/shower, 0.012 kWh/charge) now live
+// in DEFAULT_IMPACT_CFG below and are admin-tunable via the impact_json setting.
 
 // ==========================================
 // ORG-TYPE DESIGN SYSTEM
@@ -163,6 +163,26 @@ const translations = {
     maintFans: "Fans", fanOnLabel: "On", fanOffLabel: "Off",
     fan1Error: "Fan 1 stalled (tachometer silent) — cooling compromised",
     fan2Error: "Fan 2 stalled (tachometer silent) — cooling compromised",
+    stayLoggedIn: "Keep me signed in on this device",
+    fullAccountTitle: "Full Account", quickAccountNote: "You have a quick account — you'll need your password after every reload.",
+    upgradeDesc: "Add your details once to upgrade. Your name, group, points and history carry over, and this device stays signed in.",
+    ageLabel: "Age", phoneLabel: "Phone number", emailLabel: "Email",
+    upgradeBtn: "Upgrade Account", upgradeOk: "You now have a full account — this device will stay signed in.",
+    upgradeFail: "Upgrade failed — check your password and details.",
+    rewardPhoto: "Photo (optional)", removePhoto: "Remove", photoTooLarge: "Photo is too large even after resizing — pick a smaller image.",
+    adminTabUsers: "Users", adminTabRewards: "Rewards", adminTabAnalytics: "Analytics", adminTabFeedback: "Feedback", adminTabSystem: "System",
+    hubTabOverview: "Overview", hubTabActivity: "My Activity", hubTabAccount: "Account & Settings",
+    upgradeLink: "Want to stay signed in? Upgrade to a full account.",
+    approveReject: "Reject", noHistory: "No recycling activity yet — drop something off!",
+    impactSettings: "Impact Settings", impactPerItemHdr: "Per-item savings", impactEqHdr: "“Equals to” rates",
+    kgCo2PerKmLbl: "kg CO₂ per km driven", lPerShowerLbl: "Litres per shower", kwhPerChargeLbl: "kWh per phone charge",
+    saveSettings: "Save Settings", settingsSaved: "Settings saved.",
+    materialCol: "Material", co2Col: "CO₂ (kg)", waterCol: "Water (L)", energyCol: "Energy (kWh)",
+    analyticsTitle: "Waste Analytics & User Profiles",
+    analyticsNote: "Behavioral profiles of what each user throws away. Download the dataset (one row per deposit: timestamp, user, group, material, points) to train a prediction model.",
+    downloadDataset: "Download dataset (CSV)", topMatCol: "Top material", busiestDay: "Busiest day", lastActive: "Last active", loadingData: "Loading data…",
+    privacyPolicy: "Privacy Policy", termsOfService: "Terms of Service", legalBack: "Back", legalTitle: "Legal",
+    legalSee: "By continuing you agree to the", and: "and",
   },
   bg: {
     appTitle: "Смарт Рециклиране", dashboard: "Табло", admin: "Админ", userHub: "Моят Профил", about: "За нас", rewardsTab: "Награди",
@@ -226,7 +246,81 @@ const translations = {
     maintFans: "Вентилатори", fanOnLabel: "Вкл", fanOffLabel: "Изкл",
     fan1Error: "Вентилатор 1 е блокирал (няма тахо сигнал) — охлаждането е нарушено",
     fan2Error: "Вентилатор 2 е блокирал (няма тахо сигнал) — охлаждането е нарушено",
+    stayLoggedIn: "Остани вписан на това устройство",
+    fullAccountTitle: "Пълен Профил", quickAccountNote: "Имате бърз профил — паролата се изисква след всяко презареждане.",
+    upgradeDesc: "Добавете данните си веднъж, за да надградите. Името, групата, точките и историята ви се запазват, а това устройство остава вписано.",
+    ageLabel: "Възраст", phoneLabel: "Телефон", emailLabel: "Имейл",
+    upgradeBtn: "Надгради Профила", upgradeOk: "Вече имате пълен профил — това устройство остава вписано.",
+    upgradeFail: "Надграждането не успя — проверете паролата и данните.",
+    rewardPhoto: "Снимка (по избор)", removePhoto: "Премахни", photoTooLarge: "Снимката е твърде голяма дори след смаляване — изберете по-малка.",
+    adminTabUsers: "Потребители", adminTabRewards: "Награди", adminTabAnalytics: "Анализи", adminTabFeedback: "Обратна връзка", adminTabSystem: "Система",
+    hubTabOverview: "Преглед", hubTabActivity: "Моята Активност", hubTabAccount: "Профил и Настройки",
+    upgradeLink: "Искате да останете вписани? Надградете до пълен профил.",
+    approveReject: "Отхвърли", noHistory: "Все още няма рециклирания — пуснете нещо в машината!",
+    impactSettings: "Настройки на Въздействието", impactPerItemHdr: "Спестявания на артикул", impactEqHdr: "Коефициенти „равнява се на“",
+    kgCo2PerKmLbl: "кг CO₂ на км шофиране", lPerShowerLbl: "Литра на един душ", kwhPerChargeLbl: "кВтч на зареждане на телефон",
+    saveSettings: "Запази Настройките", settingsSaved: "Настройките са запазени.",
+    materialCol: "Материал", co2Col: "CO₂ (кг)", waterCol: "Вода (л)", energyCol: "Енергия (кВтч)",
+    analyticsTitle: "Анализи и Профили на Отпадъците",
+    analyticsNote: "Поведенчески профили на това какво изхвърля всеки потребител. Изтеглете набора от данни (по един ред на изхвърляне: време, потребител, група, материал, точки), за да обучите прогнозен модел.",
+    downloadDataset: "Изтегли данните (CSV)", topMatCol: "Осн. материал", busiestDay: "Най-активен ден", lastActive: "Последна активност", loadingData: "Зареждане…",
+    privacyPolicy: "Политика за Поверителност", termsOfService: "Общи Условия", legalBack: "Назад", legalTitle: "Правна информация",
+    legalSee: "Продължавайки, вие се съгласявате с", and: "и",
   }
+};
+
+const DAYS = {
+  en: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+  bg: ['Нд', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'],
+};
+
+// ==========================================
+// LEGAL TEXTS (Privacy Policy & Terms of Service)
+// Rendered on their own pages; adapt the [operator]/[contact] placeholders.
+// ==========================================
+const LEGAL = {
+  en: {
+    privacy: [
+      { h: "1. Who we are", p: "MILO is a smart recycling machine and companion app operated by your organization (the \"Operator\" — your school, office or municipality). The Operator is the data controller for the personal data described below. For any privacy question or request, contact your MILO administrator." },
+      { h: "2. What data we collect", p: "Account data: your user code, display name and group (class/department/neighborhood). Full accounts additionally store the email address, phone number and age you choose to provide. Activity data: each recycling deposit (material type, points awarded, date and time), reward redemptions and feedback messages you send. Technical data: if you enable notifications, a push subscription token issued by your browser. The machine's camera looks only at the deposit chamber to classify items; camera images are not stored, and diagnostic snapshots are only viewed live by an administrator during maintenance." },
+      { h: "3. Why we process it", p: "We process this data to run the recycling program: keeping score, showing leaderboards, fulfilling rewards, sending you notifications you asked for, responding to feedback, and producing statistics about recycling patterns (e.g. which materials are deposited and when) to improve the machine and the program. The legal basis is your consent, given when you request an account; aggregated statistics that no longer identify you may be kept for program reporting." },
+      { h: "4. Where your data lives", p: "All personal data is stored locally in a database on the recycling machine itself, operated by the Operator. It is not sold, rented, or shared with third parties. Data travels between your browser and the machine over an encrypted connection. Push notifications are delivered through your browser vendor's push service, which receives only an opaque delivery address — never your name or activity." },
+      { h: "5. How long we keep it", p: "Your data is kept while your account is active. Persistent sign-in sessions expire automatically after 30 days. If the program ends or the machine is decommissioned, accounts and activity are deleted." },
+      { h: "6. Your rights", p: "You can, at any time and without asking anyone: download a complete copy of your data (User Hub → Privacy & Data → Download my data) and permanently erase your account and all associated data (User Hub → Privacy & Data → Delete my account). Erasure is immediate and irreversible. You may also withdraw consent by deleting your account, and you have the right to lodge a complaint with your national data protection authority." },
+      { h: "7. Children", p: "In school deployments, accounts for children are created under the school's supervision and its parental-consent procedures. The app collects no more data from children than described above, and contact fields (email, phone) are optional and never required to participate." },
+      { h: "8. Changes", p: "If this policy changes materially, the Operator will announce it in the app before the change takes effect. Continued use after the announced date constitutes acceptance of the updated policy." },
+    ],
+    terms: [
+      { h: "1. Acceptance", p: "By creating an account or using the MILO app and machine, you agree to these Terms of Service and to the Privacy Policy. If you do not agree, please do not use the service." },
+      { h: "2. The service", p: "MILO is a gamified recycling program: the machine identifies deposited recyclables, awards points, and lets you exchange points for rewards offered by the Operator. The service is provided for community and educational purposes." },
+      { h: "3. Accounts", p: "You must provide accurate information, keep your password confidential, and use only your own account. One account per person. The Operator may approve, suspend or remove accounts to keep the program fair." },
+      { h: "4. Points and rewards", p: "Points have no monetary value, cannot be transferred or redeemed for cash, and may be adjusted or reset (e.g. weekly seasons). Rewards are subject to availability and are fulfilled by the Operator. Attempting to game the system — fake or non-recyclable deposits, tampering with the machine, exploiting bugs — may lead to loss of points or account removal." },
+      { h: "5. Acceptable use", p: "Deposit only accepted recyclable materials (plastic, glass, tin, paper). Never insert hazardous, burning, liquid-filled or living things into the machine. Do not attempt to open, move or interfere with the machine's hardware — contact an administrator instead." },
+      { h: "6. Availability and liability", p: "The service is provided \"as is\" without warranties of any kind. The Operator does not guarantee uninterrupted availability and is not liable for lost points, missed rewards, downtime, or data loss caused by events outside its reasonable control. Nothing in these terms limits liability that cannot be limited by law." },
+      { h: "7. Termination and changes", p: "You may stop using the service and delete your account at any time. The Operator may modify or discontinue the service, or update these terms; material changes will be announced in the app. These terms are governed by the laws of the Operator's country." },
+    ],
+  },
+  bg: {
+    privacy: [
+      { h: "1. Кои сме ние", p: "MILO е умна машина за рециклиране и придружаващо приложение, управлявани от вашата организация („Операторът“ — вашето училище, офис или община). Операторът е администратор на личните данни, описани по-долу. За всеки въпрос или искане относно поверителността се свържете с вашия MILO администратор." },
+      { h: "2. Какви данни събираме", p: "Данни за профила: вашият потребителски код, име и група (клас/отдел/квартал). Пълните профили допълнително съхраняват имейл адреса, телефонния номер и възрастта, които сте предоставили доброволно. Данни за активност: всяко рециклиране (вид материал, точки, дата и час), взети награди и изпратени отзиви. Технически данни: ако включите известията — абонаментен токен, издаден от вашия браузър. Камерата на машината гледа само камерата за изхвърляне, за да класифицира предметите; изображенията не се съхраняват, а диагностичните снимки се виждат само на живо от администратор по време на поддръжка." },
+      { h: "3. Защо ги обработваме", p: "Обработваме данните, за да работи програмата за рециклиране: точки, класации, награди, известия, отговори на обратна връзка и статистика за моделите на рециклиране (какви материали и кога се изхвърлят), за да подобряваме машината и програмата. Правното основание е вашето съгласие, дадено при заявката за профил; агрегирани статистики, които вече не ви идентифицират, могат да се пазят за отчетност." },
+      { h: "4. Къде се съхраняват данните", p: "Всички лични данни се съхраняват локално в база данни на самата машина, управлявана от Оператора. Те не се продават, отдават или споделят с трети страни. Данните пътуват между браузъра ви и машината през криптирана връзка. Известията се доставят чрез push услугата на вашия браузър, която получава само непрозрачен адрес за доставка — никога името или активността ви." },
+      { h: "5. Колко дълго ги пазим", p: "Данните се пазят, докато профилът ви е активен. Постоянните сесии за вписване изтичат автоматично след 30 дни. При прекратяване на програмата или извеждане на машината от експлоатация профилите и активността се изтриват." },
+      { h: "6. Вашите права", p: "По всяко време и без да питате никого можете: да изтеглите пълно копие на данните си (Моят Профил → Поверителност и Данни → Изтегли моите данни) и да изтриете завинаги профила си и всички свързани данни (Изтрий профила ми). Изтриването е незабавно и необратимо. Можете да оттеглите съгласието си чрез изтриване на профила и имате право на жалба до КЗЛД." },
+      { h: "7. Деца", p: "При училищни внедрявания профилите на деца се създават под надзора на училището и неговите процедури за родителско съгласие. Приложението не събира от деца повече данни от описаните по-горе, а контактните полета (имейл, телефон) са по избор и никога не са задължителни за участие." },
+      { h: "8. Промени", p: "При съществена промяна на тази политика Операторът ще я обяви в приложението, преди да влезе в сила. Продължаването на използването след обявената дата означава приемане на актуализираната политика." },
+    ],
+    terms: [
+      { h: "1. Приемане", p: "Създавайки профил или използвайки приложението и машината MILO, вие се съгласявате с настоящите Общи Условия и с Политиката за Поверителност. Ако не сте съгласни, моля не използвайте услугата." },
+      { h: "2. Услугата", p: "MILO е игровизирана програма за рециклиране: машината разпознава изхвърлените рециклируеми материали, начислява точки и ви позволява да ги обменяте за награди, предлагани от Оператора. Услугата се предоставя с общностна и образователна цел." },
+      { h: "3. Профили", p: "Трябва да предоставяте точна информация, да пазите паролата си и да използвате само собствения си профил. По един профил на човек. Операторът може да одобрява, спира или премахва профили, за да поддържа програмата честна." },
+      { h: "4. Точки и награди", p: "Точките нямат парична стойност, не могат да се прехвърлят или осребряват и могат да бъдат коригирани или нулирани (напр. седмични сезони). Наградите зависят от наличността и се предават от Оператора. Опитите за злоупотреба — фалшиви или нерециклируеми изхвърляния, манипулиране на машината, използване на грешки — могат да доведат до загуба на точки или премахване на профила." },
+      { h: "5. Допустима употреба", p: "Изхвърляйте само приемани рециклируеми материали (пластмаса, стъкло, метал, хартия). Никога не поставяйте опасни, горящи, пълни с течност или живи неща в машината. Не се опитвайте да отваряте, местите или променяте хардуера на машината — свържете се с администратор." },
+      { h: "6. Наличност и отговорност", p: "Услугата се предоставя „както е“, без каквито и да е гаранции. Операторът не гарантира непрекъсната наличност и не носи отговорност за загубени точки, пропуснати награди, престой или загуба на данни поради събития извън разумния му контрол. Нищо в тези условия не ограничава отговорност, която не може да бъде ограничена по закон." },
+      { h: "7. Прекратяване и промени", p: "Можете да спрете да използвате услугата и да изтриете профила си по всяко време. Операторът може да променя или прекратява услугата и да актуализира тези условия; съществените промени се обявяват в приложението. Условията се уреждат от законодателството на държавата на Оператора." },
+    ],
+  },
 };
 
 const getAchievementsData = (totalItems, matCounts, t) => [
@@ -251,14 +345,35 @@ const localWeekStart = () => {
   return Math.floor(Date.now() / 1000) - day * 86400 - (now.getUTCHours() * 3600 + now.getUTCMinutes() * 60 + now.getUTCSeconds());
 };
 
-const impactFrom = (matCounts) => {
+const impactFrom = (matCounts, factors = IMPACT) => {
   let co2 = 0, water = 0, energy = 0;
   Object.entries(matCounts || {}).forEach(([m, n]) => {
-    const f = IMPACT[m];
+    const f = factors[m];
     if (f) { co2 += f.co2 * n; water += f.water * n; energy += f.energy * n; }
   });
   return { co2, water, energy };
 };
+
+// Default "equals to" rates in human units (admin-tunable via impact_json).
+const DEFAULT_IMPACT_CFG = { factors: IMPACT, kgCo2PerKm: 0.12, lPerShower: 50, kwhPerCharge: 0.012 };
+
+// Downscale a reward photo client-side so the payload stays MQTT-friendly
+// (max 320px on the long edge, JPEG ~72% => typically 10-30 KB as a data URL).
+const resizeImageToDataUrl = (file, maxDim = 320) => new Promise((resolve, reject) => {
+  const img = new Image();
+  const url = URL.createObjectURL(file);
+  img.onload = () => {
+    URL.revokeObjectURL(url);
+    const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(img.width * scale));
+    canvas.height = Math.max(1, Math.round(img.height * scale));
+    canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+    resolve(canvas.toDataURL('image/jpeg', 0.72));
+  };
+  img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('image load failed')); };
+  img.src = url;
+});
 
 const urlBase64ToUint8Array = (base64String) => {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
@@ -273,6 +388,11 @@ const urlBase64ToUint8Array = (base64String) => {
 const MascotLogo = ({ className }) => (
   <img src="/milo_mascot.png" alt="" aria-hidden="true" className={className} draggable="false" />
 );
+
+// A reward shows its uploaded photo when one exists, otherwise its emoji.
+const RewardVisual = ({ reward, imgCls, emojiCls }) => reward?.photo
+  ? <img src={reward.photo} alt="" aria-hidden="true" draggable="false" className={`${imgCls} object-cover shadow-sm shrink-0`} />
+  : <span className={`${emojiCls} shrink-0`} aria-hidden="true">{reward?.icon || '🎁'}</span>;
 
 const Confetti = ({ count = 60 }) => {
   const colors = ['#f43f5e', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6'];
@@ -315,6 +435,8 @@ const AnimatedNumber = ({ value }) => {
 export default function App() {
   // Global UI State
   const [activeTab, setActiveTab] = useState('leaderboard');
+  const [adminTab, setAdminTab] = useState('users');   // admin sub-navigation
+  const [hubTab, setHubTab] = useState('overview');    // user hub sub-navigation
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [lang, setLang] = useState('en');
   const t = translations[lang] || translations['en'];
@@ -355,6 +477,10 @@ export default function App() {
   // Session State
   const [loggedInUser, setLoggedInUser] = useState(null);
   const [sessionPassword, setSessionPassword] = useState('');
+  // Full-account persistent session token (survives reloads via localStorage;
+  // quick accounts never get one).
+  const [sessionToken, setSessionToken] = useState(null);
+  const [stayLoggedIn, setStayLoggedIn] = useState(true);
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
   const [adminToken, setAdminToken] = useState(null);
   const [adminRole, setAdminRole] = useState(null);
@@ -374,7 +500,8 @@ export default function App() {
   const [editProfileForm, setEditProfileForm] = useState({ name: '', department: '', confirmPass: '' });
   const [adminForm, setAdminForm] = useState({ code: '', name: '', department: '' });
   const [newAdminForm, setNewAdminForm] = useState({ username: '', password: '', role: 'org' });
-  const [rewardForm, setRewardForm] = useState({ title: '', title_bg: '', cost: '', stock: '-1', icon: '🎁', description: '', description_bg: '' });
+  const [rewardForm, setRewardForm] = useState({ title: '', title_bg: '', cost: '', stock: '-1', icon: '🎁', description: '', description_bg: '', photo: '' });
+  const [upgradeForm, setUpgradeForm] = useState({ age: '', phone: '', email: '', confirmPass: '', pending: false });
   const [adminMessage, setAdminMessage] = useState('');
   const [confirmAction, setConfirmAction] = useState(null);
   const [resetFlow, setResetFlow] = useState(null);
@@ -387,6 +514,9 @@ export default function App() {
   const [backendBuild, setBackendBuild] = useState(null);   // reported via config/list
   const [rewardInfoModal, setRewardInfoModal] = useState(null); // reward whose description is shown
   const [maintMode, setMaintMode] = useState(false);
+  const [impactCfg, setImpactCfg] = useState(DEFAULT_IMPACT_CFG); // synced via config/list (impact_json)
+  const [impactDraft, setImpactDraft] = useState(null);           // admin editor working copy
+  const [analyticsData, setAnalyticsData] = useState(null);       // admin: per-user waste profiles
   const [snapshot, setSnapshot] = useState(null);        // { src, ts, detections } | { error }
   const [snapshotPending, setSnapshotPending] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(false);
@@ -406,6 +536,7 @@ export default function App() {
   const attemptingUserRef = useRef(null);
   const attemptingPassRef = useRef('');
   const pendingResetRef = useRef(null);
+  const pendingUpgradeRef = useRef(null);   // { code, pass } when upgrading from the login screen
   const pendingRedeemRef = useRef(null);
   const pendingGdprRef = useRef(null);
   const toastTimerRef = useRef(null);
@@ -446,6 +577,7 @@ export default function App() {
     setIsDarkMode(localStorage.getItem('miloTheme') === 'dark');
     const savedLang = localStorage.getItem('miloLang'); if (savedLang) setLang(savedLang);
     const savedUser = localStorage.getItem('miloLoggedIn'); if (savedUser) setLoggedInUser(savedUser);
+    const savedTok = localStorage.getItem('miloSessionTok'); if (savedTok) setSessionToken(savedTok);
     const savedOrg = localStorage.getItem('miloOrgType'); if (savedOrg) setOrgType(savedOrg);
     if (!('serviceWorker' in navigator) || !('PushManager' in window) || !VAPID_PUBLIC_KEY) {
       setPushState('unsupported');
@@ -554,6 +686,11 @@ export default function App() {
                   setLoggedInUser(uCode);
                   localStorage.setItem('miloLoggedIn', uCode);
                   setSessionPassword(attemptingPassRef.current || '');
+                  if (data.token) {
+                    // Full login: the backend granted a persistent device session.
+                    setSessionToken(data.token);
+                    localStorage.setItem('miloSessionTok', data.token);
+                  }
                   setLoginError('');
                   setUserView('login');
                 } else {
@@ -570,6 +707,7 @@ export default function App() {
                   setAdminToken(data.token);
                   setAdminRole(data.role);
                   setIsAdminAuthenticated(true);
+                  setAdminTab('users');
                   setAdminAuthError('');
                   setAdminAuthForm({ username: '', password: '' });
                   if (data.role === 'super') {
@@ -632,6 +770,49 @@ export default function App() {
               }
               break;
             }
+            case 'upgrade_result': {
+              setUpgradeForm(f => ({ ...f, pending: false }));
+              if (data.success) {
+                if (data.token) {
+                  setSessionToken(data.token);
+                  localStorage.setItem('miloSessionTok', data.token);
+                }
+                // Login-screen upgrade: the user wasn't logged in yet — the
+                // successful password-verified upgrade doubles as their login.
+                const pu = pendingUpgradeRef.current;
+                if (pu) {
+                  pendingUpgradeRef.current = null;
+                  setLoggedInUser(pu.code);
+                  localStorage.setItem('miloLoggedIn', pu.code);
+                  setSessionPassword(pu.pass);
+                  setUserView('login');
+                }
+                setUpgradeForm({ age: '', phone: '', email: '', confirmPass: '', pending: false });
+                setToast({ msg: tt.upgradeOk, type: 'ok' });
+              } else {
+                pendingUpgradeRef.current = null;
+                setToast({ msg: tt.upgradeFail, type: 'err' });
+              }
+              setTimeout(() => setToast(null), 4000);
+              break;
+            }
+            case 'analytics':
+              setAnalyticsData(data && typeof data === 'object' ? data : {});
+              break;
+            case 'analytics_export': {
+              const rows = Array.isArray(data.rows) ? data.rows : [];
+              const header = 'id,timestamp,iso_time,user_code,department,material,points\n';
+              const body = rows.map(r => {
+                const iso = new Date((Number(r[1]) || 0) * 1000).toISOString();
+                return `${r[0]},${r[1]},${iso},${r[2]},"${String(r[3] || '').replace(/"/g, '""')}",${r[4]},${r[5]}`;
+              }).join('\n');
+              const blob = new Blob([header + body], { type: 'text/csv' });
+              const url = window.URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url; a.download = 'milo_dataset.csv'; a.click();
+              window.URL.revokeObjectURL(url);
+              break;
+            }
             case 'maint': {
               if (data.ok === false) {
                 const reasonMap = { serial: tt.maintSerialErr, auth: tt.incorrectPass, range: 'range' };
@@ -649,7 +830,9 @@ export default function App() {
                 // Account erased server-side: end the local session too.
                 setLoggedInUser(null);
                 setSessionPassword('');
+                setSessionToken(null);
                 localStorage.removeItem('miloLoggedIn');
+                localStorage.removeItem('miloSessionTok');
                 setToast({ msg: '✓', type: 'ok' });
                 setTimeout(() => setToast(null), 2500);
               } else {
@@ -699,6 +882,19 @@ export default function App() {
             if (data && ['office', 'school', 'city'].includes(data.org_type)) {
               setOrgType(data.org_type);
               localStorage.setItem('miloOrgType', data.org_type);
+            }
+            if (data && typeof data.impact_json === 'string') {
+              try {
+                const ic = JSON.parse(data.impact_json);
+                if (ic && typeof ic === 'object') {
+                  setImpactCfg({
+                    factors: { ...IMPACT, ...(ic.factors || {}) },
+                    kgCo2PerKm: Number(ic.kgCo2PerKm) > 0 ? Number(ic.kgCo2PerKm) : DEFAULT_IMPACT_CFG.kgCo2PerKm,
+                    lPerShower: Number(ic.lPerShower) > 0 ? Number(ic.lPerShower) : DEFAULT_IMPACT_CFG.lPerShower,
+                    kwhPerCharge: Number(ic.kwhPerCharge) > 0 ? Number(ic.kwhPerCharge) : DEFAULT_IMPACT_CFG.kwhPerCharge,
+                  });
+                }
+              } catch { /* malformed config — keep defaults */ }
             }
             break;
           case `${NS}/errors`:
@@ -763,6 +959,13 @@ export default function App() {
   const safeTransactions = Array.isArray(transactions) ? transactions : [];
   const safeProfileEdits = Array.isArray(profileEdits) ? profileEdits : [];
   const safeUsers = users || {};
+
+  // "Equals to" conversion rates derived from the admin-tunable config.
+  const EQ = {
+    kmPerKgCo2: 1 / (impactCfg.kgCo2PerKm || 0.12),
+    showersPerL: 1 / (impactCfg.lPerShower || 50),
+    chargesPerKwh: 1 / (impactCfg.kwhPerCharge || 0.012),
+  };
 
   const weekStart = stats?.week_start || localWeekStart();
   const resetCountdown = useMemo(() => {
@@ -840,7 +1043,7 @@ export default function App() {
     };
   }, [stats, fallbackScope]);
 
-  const communityImpact = useMemo(() => impactFrom(scopeData('all').materials), [stats, fallbackScope]);
+  const communityImpact = useMemo(() => impactFrom(scopeData('all').materials, impactCfg.factors), [stats, fallbackScope, impactCfg]);
 
   const userRank = useMemo(() => {
     if (!loggedInUser) return 0;
@@ -904,7 +1107,10 @@ export default function App() {
       attemptingUserRef.current = code;
       attemptingPassRef.current = userAuthForm.password;
       setUserAuthPending(true);
-      pub(`${NS}/auth/request`, JSON.stringify({ req_id: reqId, code: code, password: userAuthForm.password, client_id: clientIdRef.current }));
+      // Full accounts may opt into a persistent device session; quick accounts
+      // keep the existing session-only behavior.
+      const remember = uData?.account_type === 'full' && stayLoggedIn;
+      pub(`${NS}/auth/request`, JSON.stringify({ req_id: reqId, code: code, password: userAuthForm.password, client_id: clientIdRef.current, remember }));
       setTimeout(() => {
         if (authReqIdRef.current === reqId) {
           setLoginError(t.timeoutErr);
@@ -953,8 +1159,8 @@ export default function App() {
   const submitFeedback = (e) => {
     e.preventDefault();
     const pw = sessionPassword || feedbackConfirmPass;
-    if (!feedbackText.trim() || !loggedInUser || !pw) return;
-    pub(`${NS}/feedback/submit`, JSON.stringify({ code: loggedInUser, message: feedbackText, user_password: pw }));
+    if (!feedbackText.trim() || !loggedInUser || (!pw && !sessionToken)) return;
+    pub(`${NS}/feedback/submit`, JSON.stringify({ code: loggedInUser, message: feedbackText, user_password: pw || '', user_token: sessionToken || '' }));
     setFeedbackText(''); setFeedbackConfirmPass(''); setFeedbackMsg(t.feedbackSent);
     setTimeout(() => setFeedbackMsg(''), 3000);
   };
@@ -962,9 +1168,94 @@ export default function App() {
   const submitProfileEdit = (e) => {
     e.preventDefault();
     const pw = sessionPassword || editProfileForm.confirmPass;
-    if (!loggedInUser || !pw) return;
-    pub(`${NS}/profile_edit/submit`, JSON.stringify({ code: loggedInUser, name: editProfileForm.name, department: editProfileForm.department, user_password: pw }));
+    if (!loggedInUser || (!pw && !sessionToken)) return;
+    pub(`${NS}/profile_edit/submit`, JSON.stringify({ code: loggedInUser, name: editProfileForm.name, department: editProfileForm.department, user_password: pw || '', user_token: sessionToken || '' }));
     setIsEditingProfile(false); setEditProfileForm({ name: '', department: '', confirmPass: '' });
+  };
+
+  // Quick -> full account migration: password-verified, inherits the existing
+  // profile/points/history, returns a persistent device session token.
+  const submitUpgrade = (e) => {
+    e.preventDefault();
+    const pw = sessionPassword || upgradeForm.confirmPass;
+    const age = parseInt(upgradeForm.age, 10);
+    if (!loggedInUser || !pw || !upgradeForm.email || !upgradeForm.phone || !Number.isFinite(age)) return;
+    setUpgradeForm(f => ({ ...f, pending: true }));
+    pub(`${NS}/users/update`, JSON.stringify({
+      action: 'upgrade_full', code: loggedInUser, user_password: pw,
+      email: upgradeForm.email, phone: upgradeForm.phone, age,
+      client_id: clientIdRef.current
+    }));
+    setTimeout(() => setUpgradeForm(f => (f.pending ? { ...f, pending: false } : f)), 8000);
+  };
+
+  // Same migration, launched from the login screen before any session exists:
+  // the password proves ownership, and success logs the user straight in.
+  const submitLoginUpgrade = (e) => {
+    e.preventDefault();
+    const code = userAuthForm.code;
+    const pw = upgradeForm.confirmPass;
+    const age = parseInt(upgradeForm.age, 10);
+    if (!code || !pw || !upgradeForm.email || !upgradeForm.phone || !Number.isFinite(age)) return;
+    pendingUpgradeRef.current = { code, pass: pw };
+    setUpgradeForm(f => ({ ...f, pending: true }));
+    pub(`${NS}/users/update`, JSON.stringify({
+      action: 'upgrade_full', code, user_password: pw,
+      email: upgradeForm.email, phone: upgradeForm.phone, age,
+      client_id: clientIdRef.current
+    }));
+    setTimeout(() => {
+      pendingUpgradeRef.current = null;
+      setUpgradeForm(f => (f.pending ? { ...f, pending: false } : f));
+    }, 8000);
+  };
+
+  // --- Admin: environmental impact settings ---
+  const saveImpact = (e) => {
+    e.preventDefault();
+    if (!impactDraft || !adminToken) return;
+    const factors = {};
+    ['plastic', 'glass', 'tin', 'paper'].forEach(m => {
+      factors[m] = {
+        co2: parseFloat(impactDraft[`${m}_co2`]) || 0,
+        water: parseFloat(impactDraft[`${m}_water`]) || 0,
+        energy: parseFloat(impactDraft[`${m}_energy`]) || 0,
+      };
+    });
+    const cfg = {
+      factors,
+      kgCo2PerKm: parseFloat(impactDraft.kgCo2PerKm) || DEFAULT_IMPACT_CFG.kgCo2PerKm,
+      lPerShower: parseFloat(impactDraft.lPerShower) || DEFAULT_IMPACT_CFG.lPerShower,
+      kwhPerCharge: parseFloat(impactDraft.kwhPerCharge) || DEFAULT_IMPACT_CFG.kwhPerCharge,
+    };
+    setImpactCfg(cfg); // optimistic; the config/list echo confirms
+    pub(`${NS}/config/set`, JSON.stringify({ key: 'impact_json', value: JSON.stringify(cfg), admin_token: adminToken }));
+    showToast(t.settingsSaved, 'ok');
+  };
+
+  // Populate the impact editor whenever the System tab opens.
+  useEffect(() => {
+    if (activeTab !== 'admin' || adminTab !== 'system') return;
+    const d = { kgCo2PerKm: String(impactCfg.kgCo2PerKm), lPerShower: String(impactCfg.lPerShower), kwhPerCharge: String(impactCfg.kwhPerCharge) };
+    ['plastic', 'glass', 'tin', 'paper'].forEach(m => {
+      const f = impactCfg.factors[m] || { co2: 0, water: 0, energy: 0 };
+      d[`${m}_co2`] = String(f.co2); d[`${m}_water`] = String(f.water); d[`${m}_energy`] = String(f.energy);
+    });
+    setImpactDraft(d);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, adminTab]);
+
+  // Fetch waste analytics when that admin tab opens.
+  useEffect(() => {
+    if (activeTab === 'admin' && adminTab === 'analytics' && adminToken && isConnected) {
+      setAnalyticsData(null);
+      pub(`${NS}/analytics/request`, JSON.stringify({ admin_token: adminToken, client_id: clientIdRef.current }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, adminTab, adminToken, isConnected]);
+
+  const downloadDataset = () => {
+    pub(`${NS}/analytics/export`, JSON.stringify({ admin_token: adminToken, client_id: clientIdRef.current }));
   };
 
   // --- Rewards ---
@@ -977,7 +1268,7 @@ export default function App() {
     const rm = redeemModal;
     if (!rm) return;
     const pw = sessionPassword || rm.pass;
-    if (!pw) return;
+    if (!pw && !sessionToken) return;
     const timeoutId = setTimeout(() => {
       if (pendingRedeemRef.current) {
         pendingRedeemRef.current = null;
@@ -988,7 +1279,7 @@ export default function App() {
     pendingRedeemRef.current = { rewardId: rm.reward.id, timeoutId };
     setRedeemModal({ ...rm, pending: true });
     pub(`${NS}/rewards/redeem`, JSON.stringify({
-      code: loggedInUser, user_password: pw, reward_id: rm.reward.id, client_id: clientIdRef.current
+      code: loggedInUser, user_password: pw || '', user_token: sessionToken || '', reward_id: rm.reward.id, client_id: clientIdRef.current
     }));
   };
 
@@ -1001,15 +1292,29 @@ export default function App() {
       action: 'add', title: rewardForm.title, title_bg: rewardForm.title_bg,
       cost, stock: Number.isFinite(stock) ? stock : -1, icon: rewardForm.icon || '🎁',
       description: rewardForm.description, description_bg: rewardForm.description_bg,
+      photo: rewardForm.photo,
       admin_token: adminToken
     }));
-    setRewardForm({ title: '', title_bg: '', cost: '', stock: '-1', icon: '🎁', description: '', description_bg: '' });
+    setRewardForm({ title: '', title_bg: '', cost: '', stock: '-1', icon: '🎁', description: '', description_bg: '', photo: '' });
+  };
+
+  const handleRewardPhoto = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const dataUrl = await resizeImageToDataUrl(file, 320);
+      if (dataUrl.length > 140000) { showToast(t.photoTooLarge, 'err'); return; }
+      setRewardForm(f => ({ ...f, photo: dataUrl }));
+    } catch {
+      showToast(t.photoTooLarge, 'err');
+    }
   };
 
   // --- Web Push ---
   const enableNotifications = async () => {
     if (pushState === 'unsupported' || pushState === 'denied') return;
-    if (!sessionPassword) { showToast(t.notifNeedPass, 'err'); return; }
+    if (!sessionPassword && !sessionToken) { showToast(t.notifNeedPass, 'err'); return; }
     try {
       const perm = await Notification.requestPermission();
       if (perm !== 'granted') { setPushState('denied'); return; }
@@ -1028,7 +1333,7 @@ export default function App() {
         });
       }
       pub(`${NS}/notifications/subscribe`, JSON.stringify({
-        code: loggedInUser, user_password: sessionPassword, subscription: sub.toJSON()
+        code: loggedInUser, user_password: sessionPassword || '', user_token: sessionToken || '', subscription: sub.toJSON()
       }));
       setPushState('on');
       showToast(t.notifOn, 'ok');
@@ -1043,7 +1348,9 @@ export default function App() {
     const gm = gdprModal;
     if (!gm) return;
     const pw = sessionPassword || gm.pass;
-    if (!pw) return;
+    // Deleting the account is destructive and always requires the password;
+    // exporting may ride on a full-account device session.
+    if (gm.mode === 'delete' ? !pw : (!pw && !sessionToken)) return;
     const topic = gm.mode === 'export' ? 'privacy/export' : 'privacy/delete';
     const timeoutId = setTimeout(() => {
       if (pendingGdprRef.current) {
@@ -1055,7 +1362,9 @@ export default function App() {
     pendingGdprRef.current = { mode: gm.mode, timeoutId };
     setGdprModal({ ...gm, busy: true });
     pub(`${NS}/${topic}`, JSON.stringify({
-      code: loggedInUser, user_password: pw, client_id: clientIdRef.current
+      code: loggedInUser, user_password: pw || '',
+      user_token: gm.mode === 'export' ? (sessionToken || '') : '',
+      client_id: clientIdRef.current
     }));
   };
 
@@ -1100,13 +1409,13 @@ export default function App() {
   // Leaving the admin tab or logging out ends maintenance so the machine
   // display returns to normal (the backend watchdog is the fallback).
   useEffect(() => {
-    if (maintMode && (activeTab !== 'admin' || !isAdminAuthenticated)) {
+    if (maintMode && (activeTab !== 'admin' || adminTab !== 'system' || !isAdminAuthenticated)) {
       if (adminToken) {
         pub(`${NS}/maintenance/mode`, JSON.stringify({ enabled: false, admin_token: adminToken, client_id: clientIdRef.current }));
       }
       setMaintMode(false); setAutoRefresh(false);
     }
-  }, [activeTab, isAdminAuthenticated, maintMode, adminToken]);
+  }, [activeTab, adminTab, isAdminAuthenticated, maintMode, adminToken]);
 
   // --- Admin secure actions ---
   const executeConfirmedAction = () => {
@@ -1152,11 +1461,17 @@ export default function App() {
   };
 
   const logoutUser = () => {
+    // Revoke the persistent device session server-side (best-effort).
+    if (sessionToken) pub(`${NS}/auth/logout`, JSON.stringify({ token: sessionToken }));
     setLoggedInUser(null);
     setSessionPassword('');
+    setSessionToken(null);
     localStorage.removeItem('miloLoggedIn');
+    localStorage.removeItem('miloSessionTok');
     setUserAuthForm({ code: '', password: '', name: '', department: '', consent: false });
+    setUpgradeForm({ age: '', phone: '', email: '', confirmPass: '', pending: false });
     setUserView('login');
+    setHubTab('overview');
   };
 
   const exportCSV = () => {
@@ -1294,19 +1609,19 @@ export default function App() {
         {redeemModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm animate-fade-in p-4" role="dialog" aria-modal="true">
             <div className={`bg-white dark:bg-slate-800 ${th.card} p-6 md:p-8 max-w-sm w-full shadow-2xl border border-slate-200 dark:border-slate-700 animate-scale-in text-center`}>
-              <div className="text-5xl mb-4" aria-hidden="true">{redeemModal.reward.icon || '🎁'}</div>
+              <div className="mb-4 flex justify-center"><RewardVisual reward={redeemModal.reward} imgCls="w-20 h-20 rounded-2xl" emojiCls="text-5xl" /></div>
               <h3 className="font-bold text-slate-800 dark:text-slate-100 text-xl mb-2">{t.redeemConfirmTitle}</h3>
               <p className="text-slate-500 dark:text-slate-400 text-sm mb-2">{lang === 'bg' && redeemModal.reward.title_bg ? redeemModal.reward.title_bg : redeemModal.reward.title}</p>
               <p className={`font-black text-2xl mb-4 ${th.accentText}`}>-{redeemModal.reward.cost} {t.points}</p>
               <p className="text-slate-500 dark:text-slate-400 text-xs mb-6">{t.redeemConfirmMsg}</p>
-              {!sessionPassword && (
+              {!sessionPassword && !sessionToken && (
                 <input type="password" required maxLength={128} placeholder={t.confirmPass} aria-label={t.confirmPass}
                        className={`${inputCls} mb-4 text-center`} value={redeemModal.pass}
                        onChange={e => setRedeemModal({ ...redeemModal, pass: e.target.value })} />
               )}
               <div className="flex gap-3">
                 <button type="button" onClick={() => setRedeemModal(null)} disabled={redeemModal.pending} className={`flex-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold py-3 ${th.btnShape} transition-colors disabled:opacity-50`}>{t.confirmNo}</button>
-                <button type="button" onClick={confirmRedeem} disabled={redeemModal.pending || (!sessionPassword && !redeemModal.pass)} className={`flex-1 ${btnPrimary} py-3 shadow-sm disabled:opacity-60 flex items-center justify-center gap-2`}>
+                <button type="button" onClick={confirmRedeem} disabled={redeemModal.pending || (!sessionPassword && !sessionToken && !redeemModal.pass)} className={`flex-1 ${btnPrimary} py-3 shadow-sm disabled:opacity-60 flex items-center justify-center gap-2`}>
                   {redeemModal.pending ? <Loader2 size={16} className="animate-spin" /> : <Gift size={16} aria-hidden="true" />} {t.redeemBtn}
                 </button>
               </div>
@@ -1323,14 +1638,15 @@ export default function App() {
               </div>
               <h3 className="font-bold text-slate-800 dark:text-slate-100 text-xl mb-2">{gdprModal.mode === 'delete' ? t.deleteAccount : t.downloadData}</h3>
               {gdprModal.mode === 'delete' && <p className="text-rose-500 text-sm font-semibold mb-4 px-2">{t.deleteWarn}</p>}
-              {!sessionPassword && (
+              {/* Deletion always demands the password; export may use the device session. */}
+              {(gdprModal.mode === 'delete' ? !sessionPassword : (!sessionPassword && !sessionToken)) && (
                 <input type="password" required maxLength={128} placeholder={t.confirmPass} aria-label={t.confirmPass}
                        className={`${inputCls} mb-4 text-center`} value={gdprModal.pass}
                        onChange={e => setGdprModal({ ...gdprModal, pass: e.target.value })} />
               )}
               <div className="flex gap-3">
                 <button type="button" onClick={() => setGdprModal(null)} disabled={gdprModal.busy} className={`flex-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold py-3 ${th.btnShape} transition-colors disabled:opacity-50`}>{t.confirmNo}</button>
-                <button type="button" onClick={runGdpr} disabled={gdprModal.busy || (!sessionPassword && !gdprModal.pass)} className={`flex-1 font-bold py-3 ${th.btnShape} shadow-sm text-white transition-colors disabled:opacity-60 flex items-center justify-center gap-2 ${gdprModal.mode === 'delete' ? 'bg-rose-600 hover:bg-rose-700' : th.accentBtn}`}>
+                <button type="button" onClick={runGdpr} disabled={gdprModal.busy || (gdprModal.mode === 'delete' ? (!sessionPassword && !gdprModal.pass) : (!sessionPassword && !sessionToken && !gdprModal.pass))} className={`flex-1 font-bold py-3 ${th.btnShape} shadow-sm text-white transition-colors disabled:opacity-60 flex items-center justify-center gap-2 ${gdprModal.mode === 'delete' ? 'bg-rose-600 hover:bg-rose-700' : th.accentBtn}`}>
                   {gdprModal.busy ? <Loader2 size={16} className="animate-spin" /> : null} {t.confirmYes}
                 </button>
               </div>
@@ -1341,12 +1657,12 @@ export default function App() {
         {/* Environmental impact detail modal */}
         {impactModal && (() => {
           const meta = {
-            co2: { label: t.co2Saved, unit: 'kg', factor: 'co2', icon: Cloud, eqIcon: Car, eq: (v) => `${Math.round(v * EQUIV.kmPerKgCo2)} ${t.eqKm}` },
-            water: { label: t.waterSaved, unit: 'L', factor: 'water', icon: Droplets, eqIcon: ShowerHead, eq: (v) => `${Math.round(v * EQUIV.showersPerL)} ${t.eqShowers}` },
-            energy: { label: t.energySaved, unit: 'kWh', factor: 'energy', icon: Zap, eqIcon: BatteryCharging, eq: (v) => `${Math.round(v * EQUIV.chargesPerKwh)} ${t.eqCharges}` },
+            co2: { label: t.co2Saved, unit: 'kg', factor: 'co2', icon: Cloud, eqIcon: Car, eq: (v) => `${Math.round(v * EQ.kmPerKgCo2)} ${t.eqKm}` },
+            water: { label: t.waterSaved, unit: 'L', factor: 'water', icon: Droplets, eqIcon: ShowerHead, eq: (v) => `${Math.round(v * EQ.showersPerL)} ${t.eqShowers}` },
+            energy: { label: t.energySaved, unit: 'kWh', factor: 'energy', icon: Zap, eqIcon: BatteryCharging, eq: (v) => `${Math.round(v * EQ.chargesPerKwh)} ${t.eqCharges}` },
           }[impactModal.metric];
-          const rows = Object.entries(impactModal.matCounts || {}).filter(([m, n]) => n > 0 && IMPACT[m]);
-          const total = rows.reduce((s, [m, n]) => s + IMPACT[m][meta.factor] * n, 0);
+          const rows = Object.entries(impactModal.matCounts || {}).filter(([m, n]) => n > 0 && impactCfg.factors[m]);
+          const total = rows.reduce((s, [m, n]) => s + impactCfg.factors[m][meta.factor] * n, 0);
           return (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm animate-fade-in p-4" role="dialog" aria-modal="true">
               <div className={`bg-white dark:bg-slate-800 ${th.card} p-6 md:p-8 max-w-sm w-full shadow-2xl border border-slate-200 dark:border-slate-700 animate-scale-in`}>
@@ -1359,7 +1675,7 @@ export default function App() {
                   {rows.map(([m, n]) => (
                     <div key={m} className={`flex justify-between items-center gap-2 text-sm bg-slate-50 dark:bg-slate-900 ${th.chip} px-3 py-2`}>
                       <span className="capitalize font-semibold text-slate-700 dark:text-slate-200 shrink-0">{m} × {n}</span>
-                      <span className="text-slate-500 dark:text-slate-400 text-right text-xs">{IMPACT[m][meta.factor].toFixed(2)} {meta.unit} {t.impactPerItem} = <strong className={th.accentText}>{(IMPACT[m][meta.factor] * n).toFixed(1)} {meta.unit}</strong></span>
+                      <span className="text-slate-500 dark:text-slate-400 text-right text-xs">{impactCfg.factors[m][meta.factor].toFixed(2)} {meta.unit} {t.impactPerItem} = <strong className={th.accentText}>{(impactCfg.factors[m][meta.factor] * n).toFixed(1)} {meta.unit}</strong></span>
                     </div>
                   ))}
                   {rows.length === 0 && <p className="text-sm text-slate-400 text-center">{t.dbEmpty}</p>}
@@ -1375,7 +1691,7 @@ export default function App() {
         {rewardInfoModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm animate-fade-in p-4" role="dialog" aria-modal="true">
             <div className={`bg-white dark:bg-slate-800 ${th.card} p-6 md:p-8 max-w-sm w-full shadow-2xl border border-slate-200 dark:border-slate-700 animate-scale-in text-center`}>
-              <div className="text-6xl mb-3" aria-hidden="true">{rewardInfoModal.icon || '🎁'}</div>
+              <div className="mb-3 flex justify-center"><RewardVisual reward={rewardInfoModal} imgCls="w-28 h-28 rounded-2xl" emojiCls="text-6xl" /></div>
               <h3 className="font-bold text-slate-800 dark:text-slate-100 text-xl mb-1">{lang === 'bg' && rewardInfoModal.title_bg ? rewardInfoModal.title_bg : rewardInfoModal.title}</h3>
               <p className={`font-black text-2xl mb-4 ${th.accentText}`}>{rewardInfoModal.cost} {t.points.toLowerCase()}</p>
               <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed mb-6 whitespace-pre-wrap text-left">{lang === 'bg' ? (rewardInfoModal.description_bg || rewardInfoModal.description) : rewardInfoModal.description}</p>
@@ -1469,6 +1785,10 @@ export default function App() {
                   <h3 className="text-xl font-bold text-slate-800 dark:text-white mb-3">{t.team}</h3>
                   <p className="text-slate-600 dark:text-slate-400 text-sm leading-relaxed">{t.teamDesc}</p>
                 </div>
+              </div>
+              <div className={`${cardCls} ${th.cardPad} flex flex-wrap items-center justify-center gap-6`}>
+                <button type="button" onClick={() => setActiveTab('privacy')} className={`text-sm font-bold ${th.accentText} hover:underline flex items-center gap-1.5`}><ShieldCheck size={16} aria-hidden="true" /> {t.privacyPolicy}</button>
+                <button type="button" onClick={() => setActiveTab('terms')} className={`text-sm font-bold ${th.accentText} hover:underline flex items-center gap-1.5`}><Info size={16} aria-hidden="true" /> {t.termsOfService}</button>
               </div>
             </div>
           )}
@@ -1625,17 +1945,17 @@ export default function App() {
                   <button type="button" onClick={() => setImpactModal({ metric: 'co2', matCounts: scopeData('all').materials })} className={`text-left bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 ${th.card} p-4 hover:shadow-md hover:scale-[1.01] transition-all`}>
                     <p className="text-xs font-bold uppercase text-emerald-700 dark:text-emerald-400 flex items-center gap-1"><Cloud size={14} aria-hidden="true" /> {t.co2Saved}</p>
                     <p className="text-2xl font-black mt-1 text-emerald-800 dark:text-emerald-300">{communityImpact.co2.toFixed(1)} kg</p>
-                    <p className="text-xs text-emerald-600/80 dark:text-emerald-500 mt-1 flex items-center gap-1"><Car size={12} aria-hidden="true" /> ≈ {Math.round(communityImpact.co2 * EQUIV.kmPerKgCo2)} {t.eqKm}</p>
+                    <p className="text-xs text-emerald-600/80 dark:text-emerald-500 mt-1 flex items-center gap-1"><Car size={12} aria-hidden="true" /> ≈ {Math.round(communityImpact.co2 * EQ.kmPerKgCo2)} {t.eqKm}</p>
                   </button>
                   <button type="button" onClick={() => setImpactModal({ metric: 'water', matCounts: scopeData('all').materials })} className={`text-left bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 ${th.card} p-4 hover:shadow-md hover:scale-[1.01] transition-all`}>
                     <p className="text-xs font-bold uppercase text-blue-700 dark:text-blue-400 flex items-center gap-1"><Droplets size={14} aria-hidden="true" /> {t.waterSaved}</p>
                     <p className="text-2xl font-black mt-1 text-blue-800 dark:text-blue-300">{communityImpact.water.toFixed(0)} L</p>
-                    <p className="text-xs text-blue-600/80 dark:text-blue-500 mt-1 flex items-center gap-1"><ShowerHead size={12} aria-hidden="true" /> ≈ {Math.round(communityImpact.water * EQUIV.showersPerL)} {t.eqShowers}</p>
+                    <p className="text-xs text-blue-600/80 dark:text-blue-500 mt-1 flex items-center gap-1"><ShowerHead size={12} aria-hidden="true" /> ≈ {Math.round(communityImpact.water * EQ.showersPerL)} {t.eqShowers}</p>
                   </button>
                   <button type="button" onClick={() => setImpactModal({ metric: 'energy', matCounts: scopeData('all').materials })} className={`text-left bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 ${th.card} p-4 hover:shadow-md hover:scale-[1.01] transition-all`}>
                     <p className="text-xs font-bold uppercase text-amber-700 dark:text-amber-400 flex items-center gap-1"><Zap size={14} aria-hidden="true" /> {t.energySaved}</p>
                     <p className="text-2xl font-black mt-1 text-amber-800 dark:text-amber-300">{communityImpact.energy.toFixed(1)} kWh</p>
-                    <p className="text-xs text-amber-600/80 dark:text-amber-500 mt-1 flex items-center gap-1"><BatteryCharging size={12} aria-hidden="true" /> ≈ {Math.round(communityImpact.energy * EQUIV.chargesPerKwh)} {t.eqCharges}</p>
+                    <p className="text-xs text-amber-600/80 dark:text-amber-500 mt-1 flex items-center gap-1"><BatteryCharging size={12} aria-hidden="true" /> ≈ {Math.round(communityImpact.energy * EQ.chargesPerKwh)} {t.eqCharges}</p>
                   </button>
                 </div>
               </div>
@@ -1672,7 +1992,7 @@ export default function App() {
                     return (
                       <div key={r.id} className="p-4 flex items-center justify-between gap-4">
                         <div className="flex items-center gap-4 min-w-0">
-                          <span className="text-3xl shrink-0" aria-hidden="true">{r.icon || '🎁'}</span>
+                          <RewardVisual reward={r} imgCls="w-10 h-10 rounded-lg" emojiCls="text-3xl" />
                           <div className="min-w-0">
                             <p className="font-bold text-slate-800 dark:text-slate-100 truncate">{lang === 'bg' && r.title_bg ? r.title_bg : r.title}</p>
                             <p className="text-xs text-slate-400">{r.stock === null ? t.unlimitedStock : (soldOut ? t.outOfStock : `${r.stock} ${t.stockLeft}`)}</p>
@@ -1702,7 +2022,7 @@ export default function App() {
                             <Info size={18} aria-hidden="true" />
                           </button>
                         )}
-                        <span className="text-6xl" aria-hidden="true">{r.icon || '🎁'}</span>
+                        <RewardVisual reward={r} imgCls="w-24 h-24 rounded-2xl" emojiCls="text-6xl" />
                         <p className="font-bold text-slate-800 dark:text-slate-100 text-lg leading-tight">{lang === 'bg' && r.title_bg ? r.title_bg : r.title}</p>
                         <p className={`font-black text-2xl ${th.accentText}`}>{r.cost} <span className="text-sm">{t.points.toLowerCase()}</span></p>
                         <p className="text-xs text-slate-400">{r.stock === null ? t.unlimitedStock : (soldOut ? t.outOfStock : `${r.stock} ${t.stockLeft}`)}</p>
@@ -1751,13 +2071,42 @@ export default function App() {
                       {safeUsers[userAuthForm.code]?.has_password && (
                         <input type="password" required maxLength={128} placeholder={t.password} aria-label={t.password} className={`${inputCls} text-center text-lg animate-slide-up`} value={userAuthForm.password} onChange={e => setUserAuthForm({ ...userAuthForm, password: e.target.value })} />
                       )}
+                      {/* Full accounts can stay signed in on this device */}
+                      {safeUsers[userAuthForm.code]?.has_password && safeUsers[userAuthForm.code]?.account_type === 'full' && (
+                        <label className="flex items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400 cursor-pointer animate-slide-up">
+                          <input type="checkbox" checked={stayLoggedIn} onChange={e => setStayLoggedIn(e.target.checked)} className="w-4 h-4 accent-indigo-600" />
+                          {t.stayLoggedIn}
+                        </label>
+                      )}
                       {loginError && <p className="text-rose-500 text-sm font-medium animate-shake flex items-center justify-center gap-1" role="alert"><AlertTriangle size={14} className="shrink-0" aria-hidden="true" />{loginError}</p>}
                       <button type="submit" disabled={userAuthPending || connectionState !== 'online'} className={`w-full ${btnPrimary} p-4 h-14 flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed`}>
                         {userAuthPending ? <><Loader2 size={18} className="animate-spin" /> {t.signingIn}</> : <>{t.loginBtn} <ChevronRight size={18} /></>}
                       </button>
                     </form>
                     <button type="button" onClick={() => { setUserView('request'); setLoginError(''); }} className={`mt-6 text-sm ${th.accentText} font-semibold hover:underline`}>{t.reqAccount}</button>
+                    {safeUsers[userAuthForm.code]?.has_password && safeUsers[userAuthForm.code]?.account_type !== 'full' && (
+                      <button type="button" onClick={() => { setUserView('upgrade'); setLoginError(''); }} className={`block w-full mt-4 text-sm ${th.accentText} font-semibold hover:underline animate-fade-in`}>{t.upgradeLink}</button>
+                    )}
                     <button type="button" onClick={() => { setActiveTab('admin'); setUserView('login'); }} className="block w-full mt-4 text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 font-medium">{t.adminPanelLink}</button>
+                  </div>
+                )}
+                {userView === 'upgrade' && (
+                  <div className="animate-fade-in">
+                    <h2 className="text-xl md:text-2xl font-bold text-slate-800 dark:text-slate-100 mb-2">{t.fullAccountTitle}</h2>
+                    <p className="text-slate-500 dark:text-slate-400 mb-6 text-sm">{t.upgradeDesc}</p>
+                    <form onSubmit={submitLoginUpgrade} className="space-y-4">
+                      <input type="text" required maxLength={32} placeholder={t.userCode} aria-label={t.userCode} className={`${inputCls} text-center`} value={userAuthForm.code} onChange={e => setUserAuthForm({ ...userAuthForm, code: e.target.value })} />
+                      <input type="password" required maxLength={128} placeholder={t.password} aria-label={t.password} className={`${inputCls} text-center`} value={upgradeForm.confirmPass} onChange={e => setUpgradeForm({ ...upgradeForm, confirmPass: e.target.value })} />
+                      <div className="grid grid-cols-3 gap-3">
+                        <input type="number" required min={1} max={120} placeholder={t.ageLabel} aria-label={t.ageLabel} className={`${inputCls} text-center col-span-1`} value={upgradeForm.age} onChange={e => setUpgradeForm({ ...upgradeForm, age: e.target.value })} />
+                        <input type="tel" required maxLength={32} placeholder={t.phoneLabel} aria-label={t.phoneLabel} className={`${inputCls} text-center col-span-2`} value={upgradeForm.phone} onChange={e => setUpgradeForm({ ...upgradeForm, phone: e.target.value })} />
+                      </div>
+                      <input type="email" required maxLength={128} placeholder={t.emailLabel} aria-label={t.emailLabel} className={`${inputCls} text-center`} value={upgradeForm.email} onChange={e => setUpgradeForm({ ...upgradeForm, email: e.target.value })} />
+                      <button type="submit" disabled={upgradeForm.pending || connectionState !== 'online'} className={`w-full ${btnPrimary} p-4 h-14 flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed`}>
+                        {upgradeForm.pending ? <Loader2 size={18} className="animate-spin" /> : <ShieldCheck size={18} aria-hidden="true" />} {t.upgradeBtn}
+                      </button>
+                    </form>
+                    <button type="button" onClick={() => setUserView('login')} className="mt-6 text-sm text-slate-500 hover:text-slate-800 dark:hover:text-white font-semibold">{t.backLogin}</button>
                   </div>
                 )}
                 {userView === 'request' && (
@@ -1773,6 +2122,7 @@ export default function App() {
                         <input type="checkbox" required checked={userAuthForm.consent} onChange={e => setUserAuthForm({ ...userAuthForm, consent: e.target.checked })} className="mt-0.5 w-4 h-4 accent-indigo-600 shrink-0" />
                         <span>{t.consentLabel}</span>
                       </label>
+                      <p className="text-[11px] text-slate-400">{t.legalSee} <button type="button" onClick={() => setActiveTab('terms')} className={`${th.accentText} font-semibold hover:underline`}>{t.termsOfService}</button> {t.and} <button type="button" onClick={() => setActiveTab('privacy')} className={`${th.accentText} font-semibold hover:underline`}>{t.privacyPolicy}</button>.</p>
                       <button type="submit" disabled={!userAuthForm.consent} className={`w-full ${btnPrimary} p-4 h-14 disabled:opacity-50 disabled:cursor-not-allowed`}>{t.reqBtn}</button>
                     </form>
                     <button type="button" onClick={() => setUserView('login')} className="mt-6 text-sm text-slate-500 hover:text-slate-800 dark:hover:text-white font-semibold">{t.backLogin}</button>
@@ -1796,12 +2146,20 @@ export default function App() {
                     <div className="min-w-0">
                       <h2 className="text-2xl font-black text-slate-800 dark:text-white truncate">{t.welcome}, {safeUsers[loggedInUser]?.name || 'User'}!</h2>
                       <p className="text-slate-500 dark:text-slate-400">ID: {loggedInUser} {safeUsers[loggedInUser]?.department ? `• ${safeUsers[loggedInUser].department}` : ''}</p>
-                      {!sessionPassword && <p className="text-xs text-rose-500 mt-1 font-semibold flex items-center gap-1"><AlertTriangle size={12} aria-hidden="true" /> {t.reEnterPass}</p>}
+                      {!sessionPassword && !sessionToken && <p className="text-xs text-rose-500 mt-1 font-semibold flex items-center gap-1"><AlertTriangle size={12} aria-hidden="true" /> {t.reEnterPass}</p>}
                     </div>
                   </div>
                   <button type="button" onClick={logoutUser} aria-label={t.logout} className={`flex items-center gap-2 bg-rose-50 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400 px-4 py-2 ${th.btnShape} font-bold hover:bg-rose-100 dark:hover:bg-rose-900/50 transition-colors shrink-0`}><LogOut size={16} aria-hidden="true" /> <span className="hidden sm:inline">{t.logout}</span></button>
                 </div>
 
+                {/* Hub sub-navigation */}
+                <div className={`flex flex-wrap gap-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-1 ${th.chip} shadow-sm w-fit`} role="tablist" aria-label={t.userHub}>
+                  {[['overview', t.hubTabOverview], ['activity', t.hubTabActivity], ['account', t.hubTabAccount]].map(([tab, label]) => (
+                    <button key={tab} type="button" role="tab" aria-selected={hubTab === tab} onClick={() => setHubTab(tab)} className={`px-4 py-2 ${th.chip} text-sm font-bold transition-all ${hubTab === tab ? th.accentSoft : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'}`}>{label}</button>
+                  ))}
+                </div>
+
+                {hubTab === 'overview' && (<>
                 {/* Stats */}
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                   <div className={`${th.heroGrad} ${th.card} p-6 text-white shadow-lg`}><h3 className="font-semibold text-white/80">{t.personalStats}</h3><p className="text-5xl font-black mt-2"><AnimatedNumber value={myEarned} /></p><p className="text-sm text-white/70 mt-1 uppercase tracking-wider font-bold">{t.points}</p></div>
@@ -1815,15 +2173,15 @@ export default function App() {
                   const myTxs = safeTransactions.filter(tx => tx.user_code === loggedInUser);
                   const matCounts = { plastic: 0, glass: 0, tin: 0, paper: 0 };
                   myTxs.forEach(tx => { matCounts[tx.material] = (matCounts[tx.material] || 0) + 1; });
-                  const my = impactFrom(matCounts);
+                  const my = impactFrom(matCounts, impactCfg.factors);
                   const achievementsList = getAchievementsData(myTxs.length, matCounts, t);
                   return (
                     <>
                       <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2 mt-4 mb-2"><Leaf size={20} className="text-emerald-500" aria-hidden="true" /> {t.environmentalImpact}</h2>
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <button type="button" onClick={() => setImpactModal({ metric: 'co2', matCounts })} className={`text-left w-full bg-emerald-500 ${th.card} p-6 text-white shadow-md relative overflow-hidden hover:shadow-lg hover:scale-[1.01] transition-all`}><Cloud size={80} className="absolute -bottom-4 -right-4 opacity-20" aria-hidden="true" /><h3 className="font-semibold text-emerald-100 flex items-center gap-2"><Cloud size={16} aria-hidden="true" /> {t.co2Saved}</h3><p className="text-3xl font-black mt-2">{my.co2.toFixed(1)} <span className="text-lg">kg</span></p><p className="text-xs text-emerald-100/90 mt-1 flex items-center gap-1"><Car size={12} aria-hidden="true" /> ≈ {Math.round(my.co2 * EQUIV.kmPerKgCo2)} {t.eqKm}</p></button>
-                        <button type="button" onClick={() => setImpactModal({ metric: 'water', matCounts })} className={`text-left w-full bg-blue-500 ${th.card} p-6 text-white shadow-md relative overflow-hidden hover:shadow-lg hover:scale-[1.01] transition-all`}><Droplets size={80} className="absolute -bottom-4 -right-4 opacity-20" aria-hidden="true" /><h3 className="font-semibold text-blue-100 flex items-center gap-2"><Droplets size={16} aria-hidden="true" /> {t.waterSaved}</h3><p className="text-3xl font-black mt-2">{my.water.toFixed(1)} <span className="text-lg">L</span></p><p className="text-xs text-blue-100/90 mt-1 flex items-center gap-1"><ShowerHead size={12} aria-hidden="true" /> ≈ {Math.round(my.water * EQUIV.showersPerL)} {t.eqShowers}</p></button>
-                        <button type="button" onClick={() => setImpactModal({ metric: 'energy', matCounts })} className={`text-left w-full bg-amber-500 ${th.card} p-6 text-white shadow-md relative overflow-hidden hover:shadow-lg hover:scale-[1.01] transition-all`}><Zap size={80} className="absolute -bottom-4 -right-4 opacity-20" aria-hidden="true" /><h3 className="font-semibold text-amber-100 flex items-center gap-2"><Zap size={16} aria-hidden="true" /> {t.energySaved}</h3><p className="text-3xl font-black mt-2">{my.energy.toFixed(1)} <span className="text-lg">kWh</span></p><p className="text-xs text-amber-100/90 mt-1 flex items-center gap-1"><BatteryCharging size={12} aria-hidden="true" /> ≈ {Math.round(my.energy * EQUIV.chargesPerKwh)} {t.eqCharges}</p></button>
+                        <button type="button" onClick={() => setImpactModal({ metric: 'co2', matCounts })} className={`text-left w-full bg-emerald-500 ${th.card} p-6 text-white shadow-md relative overflow-hidden hover:shadow-lg hover:scale-[1.01] transition-all`}><Cloud size={80} className="absolute -bottom-4 -right-4 opacity-20" aria-hidden="true" /><h3 className="font-semibold text-emerald-100 flex items-center gap-2"><Cloud size={16} aria-hidden="true" /> {t.co2Saved}</h3><p className="text-3xl font-black mt-2">{my.co2.toFixed(1)} <span className="text-lg">kg</span></p><p className="text-xs text-emerald-100/90 mt-1 flex items-center gap-1"><Car size={12} aria-hidden="true" /> ≈ {Math.round(my.co2 * EQ.kmPerKgCo2)} {t.eqKm}</p></button>
+                        <button type="button" onClick={() => setImpactModal({ metric: 'water', matCounts })} className={`text-left w-full bg-blue-500 ${th.card} p-6 text-white shadow-md relative overflow-hidden hover:shadow-lg hover:scale-[1.01] transition-all`}><Droplets size={80} className="absolute -bottom-4 -right-4 opacity-20" aria-hidden="true" /><h3 className="font-semibold text-blue-100 flex items-center gap-2"><Droplets size={16} aria-hidden="true" /> {t.waterSaved}</h3><p className="text-3xl font-black mt-2">{my.water.toFixed(1)} <span className="text-lg">L</span></p><p className="text-xs text-blue-100/90 mt-1 flex items-center gap-1"><ShowerHead size={12} aria-hidden="true" /> ≈ {Math.round(my.water * EQ.showersPerL)} {t.eqShowers}</p></button>
+                        <button type="button" onClick={() => setImpactModal({ metric: 'energy', matCounts })} className={`text-left w-full bg-amber-500 ${th.card} p-6 text-white shadow-md relative overflow-hidden hover:shadow-lg hover:scale-[1.01] transition-all`}><Zap size={80} className="absolute -bottom-4 -right-4 opacity-20" aria-hidden="true" /><h3 className="font-semibold text-amber-100 flex items-center gap-2"><Zap size={16} aria-hidden="true" /> {t.energySaved}</h3><p className="text-3xl font-black mt-2">{my.energy.toFixed(1)} <span className="text-lg">kWh</span></p><p className="text-xs text-amber-100/90 mt-1 flex items-center gap-1"><BatteryCharging size={12} aria-hidden="true" /> ≈ {Math.round(my.energy * EQ.chargesPerKwh)} {t.eqCharges}</p></button>
                       </div>
 
                       <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2 mt-6 mb-2"><Badge size={20} className={th.accentText} aria-hidden="true" /> {t.achievements}</h2>
@@ -1842,7 +2200,33 @@ export default function App() {
                     </>
                   );
                 })()}
+                </>)}
 
+                {/* My recycling history */}
+                {hubTab === 'activity' && (
+                  <div className={`${cardCls} overflow-hidden animate-fade-in`}>
+                    <div className={`${th.cardPad} border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50`}>
+                      <h2 className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><Clock size={18} className={th.accentText} aria-hidden="true" /> {t.myHistory}</h2>
+                    </div>
+                    <div className="divide-y divide-slate-100 dark:divide-slate-700/50">
+                      {safeTransactions.filter(tx => tx.user_code === loggedInUser).slice(0, 30).map(tx => (
+                        <div key={tx.id} className="p-4 flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className={`${th.accentSoft} p-2 ${th.chip} shrink-0`}><Recycle size={14} aria-hidden="true" /></div>
+                            <div className="min-w-0">
+                              <p className="font-bold text-slate-800 dark:text-slate-100 capitalize">{tx.material}</p>
+                              <p className="text-[11px] text-slate-400">{parseTimestamp(tx.timestamp).toLocaleString()}</p>
+                            </div>
+                          </div>
+                          <p className={`font-black ${th.accentText}`}>+{tx.points} {t.points.toLowerCase()}</p>
+                        </div>
+                      ))}
+                      {safeTransactions.filter(tx => tx.user_code === loggedInUser).length === 0 && <p className="p-8 text-sm text-slate-400 text-center">{t.noHistory}</p>}
+                    </div>
+                  </div>
+                )}
+
+                {hubTab === 'account' && (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   {/* Edit Profile + Notifications + Privacy */}
                   <div className="flex flex-col gap-6">
@@ -1857,12 +2241,34 @@ export default function App() {
                           <form onSubmit={submitProfileEdit} className="space-y-4 animate-fade-in">
                             <input type="text" required maxLength={64} placeholder={t.fullName} aria-label={t.fullName} className={inputCls} value={editProfileForm.name} onChange={e => setEditProfileForm({ ...editProfileForm, name: e.target.value })} />
                             <input type="text" maxLength={64} placeholder={deptLabel} aria-label={deptLabel} className={inputCls} value={editProfileForm.department} onChange={e => setEditProfileForm({ ...editProfileForm, department: e.target.value })} />
-                            {!sessionPassword && <input type="password" required maxLength={128} placeholder={t.confirmPass} aria-label={t.confirmPass} className={`w-full p-4 ${th.input} border border-rose-200 dark:border-rose-700/50 bg-rose-50 dark:bg-rose-900/20 text-rose-800 dark:text-rose-100 focus:ring-2 focus:ring-rose-500 outline-none transition-colors`} value={editProfileForm.confirmPass} onChange={e => setEditProfileForm({ ...editProfileForm, confirmPass: e.target.value })} />}
+                            {!sessionPassword && !sessionToken && <input type="password" required maxLength={128} placeholder={t.confirmPass} aria-label={t.confirmPass} className={`w-full p-4 ${th.input} border border-rose-200 dark:border-rose-700/50 bg-rose-50 dark:bg-rose-900/20 text-rose-800 dark:text-rose-100 focus:ring-2 focus:ring-rose-500 outline-none transition-colors`} value={editProfileForm.confirmPass} onChange={e => setEditProfileForm({ ...editProfileForm, confirmPass: e.target.value })} />}
                             <div className="flex gap-2"><button type="submit" className={`flex-1 ${btnPrimary} p-3 shadow-sm`}>{t.requestEdit}</button><button type="button" onClick={() => setIsEditingProfile(false)} className={`bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold p-3 px-6 ${th.btnShape} transition-colors`}>{t.cancel}</button></div>
                           </form>
                         )}
                       </div>
                     </div>
+
+                    {/* Full-account upgrade (quick accounts only) */}
+                    {safeUsers[loggedInUser]?.account_type !== 'full' && (
+                      <div className={`${cardCls} overflow-hidden`}>
+                        <div className={`${th.cardPad} border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50`}><h2 className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><ShieldCheck size={18} className={th.accentText} aria-hidden="true" /> {t.fullAccountTitle}</h2></div>
+                        <div className={th.cardPad}>
+                          <p className="text-sm text-slate-500 dark:text-slate-400 mb-1">{t.quickAccountNote}</p>
+                          <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">{t.upgradeDesc}</p>
+                          <form onSubmit={submitUpgrade} className="space-y-3">
+                            <div className="grid grid-cols-3 gap-3">
+                              <input type="number" required min={1} max={120} placeholder={t.ageLabel} aria-label={t.ageLabel} className={`${inputSm} col-span-1`} value={upgradeForm.age} onChange={e => setUpgradeForm({ ...upgradeForm, age: e.target.value })} />
+                              <input type="tel" required maxLength={32} placeholder={t.phoneLabel} aria-label={t.phoneLabel} className={`${inputSm} col-span-2`} value={upgradeForm.phone} onChange={e => setUpgradeForm({ ...upgradeForm, phone: e.target.value })} />
+                            </div>
+                            <input type="email" required maxLength={128} placeholder={t.emailLabel} aria-label={t.emailLabel} className={inputSm} value={upgradeForm.email} onChange={e => setUpgradeForm({ ...upgradeForm, email: e.target.value })} />
+                            {!sessionPassword && <input type="password" required maxLength={128} placeholder={t.confirmPass} aria-label={t.confirmPass} className={`w-full px-3 h-12 ${th.input} border border-rose-200 dark:border-rose-700/50 bg-rose-50 dark:bg-rose-900/20 text-rose-800 dark:text-rose-100 focus:ring-2 focus:ring-rose-500 outline-none transition-colors`} value={upgradeForm.confirmPass} onChange={e => setUpgradeForm({ ...upgradeForm, confirmPass: e.target.value })} />}
+                            <button type="submit" disabled={upgradeForm.pending || !isConnected} className={`w-full ${btnPrimary} p-4 flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed`}>
+                              {upgradeForm.pending ? <Loader2 size={18} className="animate-spin" /> : <ShieldCheck size={18} aria-hidden="true" />} {t.upgradeBtn}
+                            </button>
+                          </form>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Notifications */}
                     <div className={`${cardCls} overflow-hidden`}>
@@ -1887,7 +2293,7 @@ export default function App() {
                       {feedbackMsg && <div className={`mb-4 p-3 bg-emerald-50 text-emerald-700 ${th.card} flex items-center gap-2 animate-fade-in`} role="status" aria-live="polite"><Check size={16} aria-hidden="true" /> {feedbackMsg}</div>}
                       <form onSubmit={submitFeedback}>
                         <textarea required maxLength={1000} placeholder={t.feedbackPh} aria-label={t.feedbackHub} rows="4" className={`${inputCls} resize-none mb-4`} value={feedbackText} onChange={e => setFeedbackText(e.target.value)} />
-                        {!sessionPassword && <input type="password" required maxLength={128} placeholder={t.confirmPass} aria-label={t.confirmPass} className={`w-full p-4 ${th.input} border border-rose-200 dark:border-rose-700/50 bg-rose-50 dark:bg-rose-900/20 text-rose-800 dark:text-rose-100 focus:ring-2 focus:ring-rose-500 outline-none transition-colors mb-4`} value={feedbackConfirmPass} onChange={e => setFeedbackConfirmPass(e.target.value)} />}
+                        {!sessionPassword && !sessionToken && <input type="password" required maxLength={128} placeholder={t.confirmPass} aria-label={t.confirmPass} className={`w-full p-4 ${th.input} border border-rose-200 dark:border-rose-700/50 bg-rose-50 dark:bg-rose-900/20 text-rose-800 dark:text-rose-100 focus:ring-2 focus:ring-rose-500 outline-none transition-colors mb-4`} value={feedbackConfirmPass} onChange={e => setFeedbackConfirmPass(e.target.value)} />}
                         <button type="submit" className={`w-full ${btnPrimary} p-4`}>{t.sendFeedback}</button>
                       </form>
                     </div>
@@ -1902,11 +2308,39 @@ export default function App() {
                         <button type="button" onClick={() => setGdprModal({ mode: 'export', pass: '', busy: false })} className={`flex-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700/50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold p-3 ${th.btnShape} transition-colors flex items-center justify-center gap-2`}><FileDown size={16} aria-hidden="true" /> {t.downloadData}</button>
                         <button type="button" onClick={() => setGdprModal({ mode: 'delete', pass: '', busy: false })} className={`flex-1 bg-rose-50 hover:bg-rose-100 dark:bg-rose-900/30 dark:hover:bg-rose-900/50 text-rose-600 dark:text-rose-400 font-bold p-3 ${th.btnShape} transition-colors flex items-center justify-center gap-2`}><UserX size={16} aria-hidden="true" /> {t.deleteAccount}</button>
                       </div>
+                      <div className="mt-4 flex gap-4 justify-center text-xs">
+                        <button type="button" onClick={() => setActiveTab('privacy')} className={`${th.accentText} font-semibold hover:underline`}>{t.privacyPolicy}</button>
+                        <button type="button" onClick={() => setActiveTab('terms')} className={`${th.accentText} font-semibold hover:underline`}>{t.termsOfService}</button>
+                      </div>
                     </div>
                   </div>
                 </div>
+                )}
               </div>
             )
+          )}
+
+          {/* TAB: LEGAL (privacy policy / terms of service) */}
+          {(activeTab === 'privacy' || activeTab === 'terms') && (
+            <div className="max-w-3xl mx-auto animate-fade-in pb-24 md:pb-0">
+              <button type="button" onClick={() => setActiveTab('about')} className={`mb-4 flex items-center gap-1 text-sm font-bold ${th.accentText} hover:underline`}>
+                <ChevronRight size={16} className="rotate-180" aria-hidden="true" /> {t.legalBack}
+              </button>
+              <div className={`${cardCls} ${th.cardPad}`}>
+                <h1 className="text-2xl font-black text-slate-800 dark:text-white mb-2 flex items-center gap-2">
+                  <ShieldCheck className={th.accentText} aria-hidden="true" /> {activeTab === 'privacy' ? t.privacyPolicy : t.termsOfService}
+                </h1>
+                <p className="text-xs text-slate-400 mb-6">MILO · {new Date().getFullYear()}</p>
+                <div className="space-y-6">
+                  {(LEGAL[lang] || LEGAL.en)[activeTab === 'privacy' ? 'privacy' : 'terms'].map(sec => (
+                    <section key={sec.h}>
+                      <h2 className="font-bold text-slate-800 dark:text-slate-100 mb-2">{sec.h}</h2>
+                      <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">{sec.p}</p>
+                    </section>
+                  ))}
+                </div>
+              </div>
+            </div>
           )}
 
           {/* TAB: ADMIN */}
@@ -1958,6 +2392,29 @@ export default function App() {
                   </div>
                 )}
 
+                {/* Admin sub-navigation: one section per concern, badge = items waiting */}
+                {(() => {
+                  const pendingReqCount = Object.values(safeUsers).filter(u => u.status === 'pending').length;
+                  const tabs = [
+                    ['users', t.adminTabUsers, pendingReqCount + safeProfileEdits.length],
+                    ['rewards', t.adminTabRewards, redemptions.filter(r => r.status === 'pending').length],
+                    ['analytics', t.adminTabAnalytics, 0],
+                    ['feedback', t.adminTabFeedback, (feedbacks || []).length],
+                    ...(adminRole === 'super' ? [['system', t.adminTabSystem, Object.keys(hardwareErrors).length]] : []),
+                  ];
+                  return (
+                    <div className={`flex flex-wrap gap-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-1 ${th.chip} shadow-sm w-fit`} role="tablist" aria-label={t.admin}>
+                      {tabs.map(([tab, label, badge]) => (
+                        <button key={tab} type="button" role="tab" aria-selected={adminTab === tab} onClick={() => setAdminTab(tab)} className={`px-4 py-2 ${th.chip} text-sm font-bold transition-all flex items-center gap-2 ${adminTab === tab ? th.accentSoft : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'}`}>
+                          {label}
+                          {badge > 0 && <span className="bg-rose-500 text-white text-[10px] font-black rounded-full min-w-[18px] h-[18px] px-1 flex items-center justify-center">{badge}</span>}
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })()}
+
+                {adminTab === 'rewards' && (<>
                 {/* Pending redemptions queue */}
                 {redemptions.filter(r => r.status === 'pending').length > 0 && (
                   <div className={`${cardCls} border-amber-200 dark:border-amber-700/50 ${th.cardPad} animate-slide-up`}>
@@ -1990,13 +2447,24 @@ export default function App() {
                     <div className="space-y-1"><label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t.rewardIcon}</label><input type="text" maxLength={4} className={`${inputSm} text-center`} value={rewardForm.icon} onChange={e => setRewardForm({ ...rewardForm, icon: e.target.value })} /></div>
                     <div className="space-y-1 col-span-2 md:col-span-3"><label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t.rewardDescEn}</label><input type="text" maxLength={200} className={inputSm} value={rewardForm.description} onChange={e => setRewardForm({ ...rewardForm, description: e.target.value })} /></div>
                     <div className="space-y-1 col-span-2 md:col-span-3"><label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t.rewardDescBg}</label><input type="text" maxLength={200} className={inputSm} value={rewardForm.description_bg} onChange={e => setRewardForm({ ...rewardForm, description_bg: e.target.value })} /></div>
+                    <div className="space-y-1 col-span-2 md:col-span-6">
+                      <label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t.rewardPhoto}</label>
+                      {rewardForm.photo ? (
+                        <div className="flex items-center gap-3">
+                          <img src={rewardForm.photo} alt="" className="w-12 h-12 rounded-lg object-cover shadow-sm" draggable="false" />
+                          <button type="button" onClick={() => setRewardForm(f => ({ ...f, photo: '' }))} className={`text-xs font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-900/30 hover:bg-rose-100 dark:hover:bg-rose-900/50 px-3 py-2 ${th.btnShape} transition-colors`}>{t.removePhoto}</button>
+                        </div>
+                      ) : (
+                        <input type="file" accept="image/*" onChange={handleRewardPhoto} aria-label={t.rewardPhoto} className="block w-full text-xs text-slate-500 dark:text-slate-400 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-slate-100 dark:file:bg-slate-700 file:text-slate-700 dark:file:text-slate-200 file:cursor-pointer" />
+                      )}
+                    </div>
                     <button type="submit" className={`${btnPrimary} p-3 h-12 flex items-center justify-center gap-2 col-span-2 md:col-span-6`}><UserPlus size={18} aria-hidden="true" /> {t.addReward}</button>
                   </form>
                   <div className="space-y-2">
                     {rewards.map(r => (
                       <div key={r.id} className={`flex justify-between items-center bg-slate-50 dark:bg-slate-700/30 p-3 ${th.card} border border-slate-100 dark:border-slate-700 gap-3`}>
                         <div className="flex items-center gap-3 min-w-0">
-                          <span className="text-2xl shrink-0" aria-hidden="true">{r.icon || '🎁'}</span>
+                          <RewardVisual reward={r} imgCls="w-9 h-9 rounded-lg" emojiCls="text-2xl" />
                           <div className="min-w-0"><p className="font-bold text-slate-800 dark:text-slate-100 truncate">{r.title}{r.title_bg ? ` / ${r.title_bg}` : ''}</p><p className="text-xs text-slate-500">{r.cost} {t.points.toLowerCase()} · {r.stock === null ? t.unlimitedStock : `${r.stock} ${t.stockLeft}`}</p></div>
                         </div>
                         <button type="button" onClick={() => setConfirmAction({ type: 'delete_reward', rewardId: r.id, name: r.title })} aria-label={`Delete reward ${r.title}`} className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded-lg transition-colors shrink-0"><Trash2 size={16} aria-hidden="true" /></button>
@@ -2005,8 +2473,9 @@ export default function App() {
                     {rewards.length === 0 && <p className="text-center text-slate-400 text-sm py-2">{t.dbEmpty}</p>}
                   </div>
                 </div>
+                </>)}
 
-                {adminRole === 'super' && (
+                {adminRole === 'super' && adminTab === 'system' && (
                   <>
                     <div className={`${cardCls} ${th.cardPad}`}>
                       <div className="flex justify-between items-center mb-4"><h2 className="text-lg md:text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><Activity className="text-rose-500" aria-hidden="true" /> {t.hardwareDiagnostics}</h2>{Object.keys(hardwareErrors).length > 0 && <button type="button" onClick={() => setHardwareErrors({})} className={`text-xs bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 text-slate-600 dark:text-slate-300 px-3 py-1.5 ${th.btnShape} font-semibold`}>{t.clearErrors}</button>}</div>
@@ -2108,6 +2577,48 @@ export default function App() {
                       </div>
                     </div>
 
+                    {/* Environmental impact settings: per-item factors + "equals to" rates */}
+                    <div className={`${cardCls} ${th.cardPad}`}>
+                      <h2 className="text-lg md:text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2 mb-2"><Leaf className="text-emerald-500" aria-hidden="true" /> {t.impactSettings}</h2>
+                      <p className="text-xs text-slate-400 mb-4">{t.impactDisclaimer}</p>
+                      {impactDraft && (
+                        <form onSubmit={saveImpact} className="space-y-4">
+                          <p className="text-xs font-bold uppercase text-slate-400">{t.impactPerItemHdr}</p>
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-sm min-w-[420px]">
+                              <thead>
+                                <tr className="text-left text-xs text-slate-400">
+                                  <th className="p-2 font-semibold">{t.materialCol}</th><th className="p-2 font-semibold">{t.co2Col}</th><th className="p-2 font-semibold">{t.waterCol}</th><th className="p-2 font-semibold">{t.energyCol}</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {['plastic', 'glass', 'tin', 'paper'].map(m => (
+                                  <tr key={m}>
+                                    <td className="p-2 font-bold capitalize text-slate-700 dark:text-slate-200">{m}</td>
+                                    {['co2', 'water', 'energy'].map(k => (
+                                      <td key={k} className="p-2">
+                                        <input type="number" step="0.01" min="0" aria-label={`${m} ${k}`} className={inputSm} value={impactDraft[`${m}_${k}`] ?? ''} onChange={e => setImpactDraft(d => ({ ...d, [`${m}_${k}`]: e.target.value }))} />
+                                      </td>
+                                    ))}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          <p className="text-xs font-bold uppercase text-slate-400">{t.impactEqHdr}</p>
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            {[['kgCo2PerKm', t.kgCo2PerKmLbl], ['lPerShower', t.lPerShowerLbl], ['kwhPerCharge', t.kwhPerChargeLbl]].map(([k, label]) => (
+                              <div key={k} className="space-y-1">
+                                <label className="text-xs font-semibold text-slate-600 dark:text-slate-400">{label}</label>
+                                <input type="number" step="0.001" min="0" className={inputSm} value={impactDraft[k] ?? ''} onChange={e => setImpactDraft(d => ({ ...d, [k]: e.target.value }))} />
+                              </div>
+                            ))}
+                          </div>
+                          <button type="submit" className={`${btnPrimary} px-6 py-3`}>{t.saveSettings}</button>
+                        </form>
+                      )}
+                    </div>
+
                     <div className={`${cardCls} ${th.cardPad}`}>
                       <h2 className="text-lg md:text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2 mb-6"><ShieldCheck className={th.accentText} aria-hidden="true" /> {t.adminAccounts}</h2>
                       <form onSubmit={submitNewAdmin} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end mb-6">
@@ -2135,6 +2646,33 @@ export default function App() {
                     </div>
                   </>
                 )}
+
+                {adminTab === 'users' && (<>
+                {/* Pending account requests — BUG FIX: these users were filtered
+                    out of the directory table and rendered nowhere, so admins
+                    could never approve a new signup. */}
+                {(() => {
+                  const pendingList = Object.entries(safeUsers).filter(([, d]) => d.status === 'pending');
+                  return pendingList.length > 0 && (
+                    <div className={`${cardCls} border-amber-200 dark:border-amber-700/50 ${th.cardPad} animate-slide-up`}>
+                      <h2 className="text-lg md:text-xl font-bold text-amber-800 dark:text-amber-400 flex items-center gap-2 mb-4"><UserPlus size={20} aria-hidden="true" /> {t.pendingUsers} ({pendingList.length})</h2>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {pendingList.map(([code, d]) => (
+                          <div key={code} className={`bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-800 p-4 ${th.card} flex flex-col gap-3`}>
+                            <div>
+                              <p className="font-bold text-amber-900 dark:text-amber-300">{d.name || t.unnamedUser}</p>
+                              <p className="text-xs text-amber-700/80 dark:text-amber-500">ID: {code}{d.department ? ` · ${d.department}` : ''}</p>
+                            </div>
+                            <div className="flex gap-2">
+                              <button type="button" onClick={() => pub(`${NS}/users/update`, JSON.stringify({ action: 'approve', code, admin_token: adminToken }))} className={`flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-2 ${th.btnShape} text-sm font-bold shadow-sm transition-colors`}>{t.approve}</button>
+                              <button type="button" onClick={() => setConfirmAction({ type: 'delete', code, name: d.name || code })} className={`flex-1 bg-rose-100 hover:bg-rose-200 text-rose-700 dark:bg-rose-900/40 dark:hover:bg-rose-900/60 dark:text-rose-400 py-2 ${th.btnShape} text-sm font-bold transition-colors`}>{t.approveReject}</button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Profile Edit Approvals */}
                 {safeProfileEdits.length > 0 && (
@@ -2217,8 +2755,60 @@ export default function App() {
                     </table>
                   </div>
                 </div>
+                </>)}
+
+                {/* Waste analytics & user profiles */}
+                {adminTab === 'analytics' && (
+                  <div className={`${cardCls} ${th.cardPad} animate-fade-in`}>
+                    <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
+                      <h2 className="text-lg md:text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><Activity className={th.accentText} aria-hidden="true" /> {t.analyticsTitle}</h2>
+                      <button type="button" onClick={downloadDataset} disabled={!isConnected} className={`${btnPrimary} px-4 py-2 text-sm flex items-center gap-2 disabled:opacity-50`}><Download size={14} aria-hidden="true" /> {t.downloadDataset}</button>
+                    </div>
+                    <p className="text-xs text-slate-400 mb-4">{t.analyticsNote}</p>
+                    {analyticsData === null ? (
+                      <p className="text-sm text-slate-400 flex items-center gap-2 py-4"><Loader2 size={14} className="animate-spin" /> {t.loadingData}</p>
+                    ) : Object.keys(analyticsData).length === 0 ? (
+                      <p className="text-sm text-slate-400 text-center py-4">{t.dbEmpty}</p>
+                    ) : (
+                      <div className="overflow-x-auto w-full">
+                        <table className="w-full text-left border-collapse min-w-[760px] text-sm">
+                          <thead>
+                            <tr className="text-slate-500 dark:text-slate-400 text-xs border-b border-slate-200 dark:border-slate-700">
+                              <th className="p-3 font-semibold" scope="col">{t.fullName}</th>
+                              <th className="p-3 font-semibold" scope="col">{t.kpiItems}</th>
+                              <th className="p-3 font-semibold" scope="col">{t.points}</th>
+                              <th className="p-3 font-semibold" scope="col">{t.topMatCol}</th>
+                              <th className="p-3 font-semibold" scope="col">{t.impactBreakdown}</th>
+                              <th className="p-3 font-semibold" scope="col">{t.busiestDay}</th>
+                              <th className="p-3 font-semibold" scope="col">{t.lastActive}</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
+                            {Object.entries(analyticsData).sort((a, b) => (b[1].items || 0) - (a[1].items || 0)).map(([code, p]) => {
+                              const mats = Object.entries(p.materials || {}).sort((x, y) => y[1] - x[1]);
+                              const wk = Array.isArray(p.weekday) ? p.weekday : [];
+                              const topDay = wk.length ? wk.indexOf(Math.max(...wk)) : -1;
+                              return (
+                                <tr key={code} className="hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                                  <td className="p-3"><p className="font-bold text-slate-800 dark:text-slate-100">{p.name || t.unnamedUser}</p><p className="text-[11px] text-slate-400 font-mono">{code}{p.department ? ` · ${p.department}` : ''}</p></td>
+                                  <td className="p-3 font-bold">{p.items}</td>
+                                  <td className={`p-3 font-bold ${th.accentText}`}>{p.points}</td>
+                                  <td className="p-3 capitalize font-semibold">{mats[0]?.[0] || '-'}</td>
+                                  <td className="p-3"><div className="flex flex-wrap gap-1">{mats.map(([m, n]) => <span key={m} className={`${th.chip} bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-2 py-0.5 text-[11px] font-semibold capitalize`}>{m} {n}</span>)}</div></td>
+                                  <td className="p-3">{p.items > 0 && topDay >= 0 ? (DAYS[lang] || DAYS.en)[topDay] : '-'}</td>
+                                  <td className="p-3 text-xs text-slate-400">{p.last_ts ? parseTimestamp(p.last_ts).toLocaleDateString() : '-'}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Feedback Logs */}
+                {adminTab === 'feedback' && (
                 <div className={`${cardCls} overflow-hidden`}>
                   <div className={`${th.cardPad} border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50`}>
                     <h3 className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><MessageSquare size={18} className={th.accentText} aria-hidden="true" /> {t.adminFeedback}</h3>
@@ -2239,6 +2829,7 @@ export default function App() {
                     {(!feedbacks || feedbacks.length === 0) && <p className="text-center text-slate-400">{t.dbEmpty}</p>}
                   </div>
                 </div>
+                )}
               </div>
             )
           )}
