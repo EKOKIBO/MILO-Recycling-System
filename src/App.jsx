@@ -7,7 +7,7 @@ import {
   AlertTriangle, MessageSquare, LogOut, Check, ChevronRight, UserCircle, Loader2, Key, Info,
   Leaf, Recycle, Globe2, Cloud, Droplets, Medal, Star, Badge,
   Gift, Bell, FileDown, UserX, Timer, Car, ShowerHead, BatteryCharging, Flag, Sparkles,
-  Wrench, Camera, RefreshCw, Fan
+  Wrench, Camera, RefreshCw, Fan, Flame, Target
 } from 'lucide-react';
 
 // ==========================================
@@ -24,7 +24,7 @@ const MQTT_PASS = import.meta.env?.VITE_MQTT_PASS || 'goodboy_f@g&gay';
 // the private half lives ONLY on the Pi as MILO_VAPID_PRIVATE_KEY).
 const VAPID_PUBLIC_KEY = import.meta.env?.VITE_VAPID_PUBLIC_KEY || 'BFEREDv8zD4h3UumMdzp-aV4S7KusQAlb_0ihjhh72A3_y-dYtvaEYuNfHGqRzGbvVdZu2kdFlwwCT1jJVUXZvg';
 const NS = 'milo_v2_system';
-const FRONTEND_BUILD = '2026-07-18.2'; // shown in the admin bar next to the backend build
+const FRONTEND_BUILD = '2026-07-18.3'; // shown in the admin bar next to the backend build
 
 // Illustrative per-item averages (kg CO2, litres water, kWh energy saved vs virgin
 // production). Sources vary widely; keep these as motivational estimates.
@@ -183,6 +183,22 @@ const translations = {
     downloadDataset: "Download dataset (CSV)", topMatCol: "Top material", busiestDay: "Busiest day", lastActive: "Last active", loadingData: "Loading data…",
     privacyPolicy: "Privacy Policy", termsOfService: "Terms of Service", legalBack: "Back", legalTitle: "Legal",
     legalSee: "By continuing you agree to the", and: "and",
+    challengeTitle: "Weekly Challenge", challengeDesc: "Recycle {target} {material} items this week",
+    challengeReward: "+{bonus} bonus", challengeDone: "Challenge complete!",
+    streakLabel: "day streak", streakBonusLbl: "streak bonus",
+    luckyTitle: "LUCKY DROP!", luckyDesc: "Double points on this deposit!",
+    trophyCabinet: "Trophy Cabinet", weekOf: "Week of", topTeamLbl: "Top team", topRecyclerLbl: "Top recycler",
+    nudgeText: "You're {points} points behind {name} — keep recycling to pass them!",
+    nudgeTop: "You're #1 — defend your crown! 👑",
+    binLevels: "Bin Fill Levels", binEmptied: "Mark emptied", binCapacityLbl: "Capacity",
+    binFull: "Bin almost full — needs emptying",
+    monthlyReport: "Monthly report (HTML)", reportTitle: "MILO Monthly Impact Report", reportPeriod: "Last 30 days",
+    badgeSilver: "Silver Recycler", badgeSilverDesc: "Recycle 25 items in total.",
+    badgeGold: "Gold Recycler", badgeGoldDesc: "Recycle 50 items in total.",
+    badgeDiamond: "Diamond Recycler", badgeDiamondDesc: "Recycle 100 items in total.",
+    badgeTin: "Tin Titan", badgeTinDesc: "Recycle 20 tin items.",
+    badgePaper: "Paper Pro", badgePaperDesc: "Recycle 20 paper items.",
+    badgeStreak: "On Fire", badgeStreakDesc: "Recycle 7 days in a row.",
   },
   bg: {
     appTitle: "Смарт Рециклиране", dashboard: "Табло", admin: "Админ", userHub: "Моят Профил", about: "За нас", rewardsTab: "Награди",
@@ -266,6 +282,22 @@ const translations = {
     downloadDataset: "Изтегли данните (CSV)", topMatCol: "Осн. материал", busiestDay: "Най-активен ден", lastActive: "Последна активност", loadingData: "Зареждане…",
     privacyPolicy: "Политика за Поверителност", termsOfService: "Общи Условия", legalBack: "Назад", legalTitle: "Правна информация",
     legalSee: "Продължавайки, вие се съгласявате с", and: "и",
+    challengeTitle: "Седмично Предизвикателство", challengeDesc: "Рециклирайте {target} артикула {material} тази седмица",
+    challengeReward: "+{bonus} бонус", challengeDone: "Предизвикателството е изпълнено!",
+    streakLabel: "дни поред", streakBonusLbl: "бонус за серия",
+    luckyTitle: "КЪСМЕТЛИЙСКО ХВЪРЛЯНЕ!", luckyDesc: "Двойни точки за това рециклиране!",
+    trophyCabinet: "Витрина с Трофеи", weekOf: "Седмица от", topTeamLbl: "Топ отбор", topRecyclerLbl: "Топ рециклатор",
+    nudgeText: "Изоставате с {points} точки от {name} — продължавайте, за да ги изпреварите!",
+    nudgeTop: "Вие сте №1 — защитете короната! 👑",
+    binLevels: "Запълване на Кошовете", binEmptied: "Изпразнен", binCapacityLbl: "Капацитет",
+    binFull: "Кошът е почти пълен — нуждае се от изпразване",
+    monthlyReport: "Месечен отчет (HTML)", reportTitle: "MILO Месечен Отчет за Въздействието", reportPeriod: "Последните 30 дни",
+    badgeSilver: "Сребърен Рециклатор", badgeSilverDesc: "Рециклирайте общо 25 артикула.",
+    badgeGold: "Златен Рециклатор", badgeGoldDesc: "Рециклирайте общо 50 артикула.",
+    badgeDiamond: "Диамантен Рециклатор", badgeDiamondDesc: "Рециклирайте общо 100 артикула.",
+    badgeTin: "Метален Титан", badgeTinDesc: "Рециклирайте 20 метални артикула.",
+    badgePaper: "Хартиен Про", badgePaperDesc: "Рециклирайте 20 хартиени артикула.",
+    badgeStreak: "В Пламъци", badgeStreakDesc: "Рециклирайте 7 дни поред.",
   }
 };
 
@@ -323,12 +355,30 @@ const LEGAL = {
   },
 };
 
-const getAchievementsData = (totalItems, matCounts, t) => [
+const getAchievementsData = (totalItems, matCounts, t, streak = 0) => [
   { id: 'first', title: t.badgeFirst, desc: t.badgeFirstDesc, icon: Star, req: 1, cur: totalItems, color: 'text-indigo-500', colorClass: 'text-indigo-700 bg-indigo-50 border-indigo-200 dark:bg-indigo-900/30 dark:border-indigo-800 dark:text-indigo-300' },
   { id: 'bronze', title: t.badgeBronze, desc: t.badgeBronzeDesc, icon: Medal, req: 10, cur: totalItems, color: 'text-amber-500', colorClass: 'text-amber-800 bg-amber-50 border-amber-200 dark:bg-amber-900/30 dark:border-amber-800 dark:text-amber-400' },
+  { id: 'silver', title: t.badgeSilver, desc: t.badgeSilverDesc, icon: Medal, req: 25, cur: totalItems, color: 'text-slate-400', colorClass: 'text-slate-700 bg-slate-50 border-slate-300 dark:bg-slate-700/40 dark:border-slate-600 dark:text-slate-300' },
+  { id: 'gold', title: t.badgeGold, desc: t.badgeGoldDesc, icon: Trophy, req: 50, cur: totalItems, color: 'text-yellow-500', colorClass: 'text-yellow-800 bg-yellow-50 border-yellow-200 dark:bg-yellow-900/30 dark:border-yellow-800 dark:text-yellow-400' },
+  { id: 'diamond', title: t.badgeDiamond, desc: t.badgeDiamondDesc, icon: Sparkles, req: 100, cur: totalItems, color: 'text-violet-500', colorClass: 'text-violet-800 bg-violet-50 border-violet-200 dark:bg-violet-900/30 dark:border-violet-800 dark:text-violet-400' },
+  { id: 'streak7', title: t.badgeStreak, desc: t.badgeStreakDesc, icon: Flame, req: 7, cur: streak, color: 'text-orange-500', colorClass: 'text-orange-800 bg-orange-50 border-orange-200 dark:bg-orange-900/30 dark:border-orange-800 dark:text-orange-400' },
   { id: 'plastic', title: t.badgePlastic, desc: t.badgePlasticDesc, icon: Recycle, req: 20, cur: matCounts.plastic || 0, color: 'text-cyan-500', colorClass: 'text-cyan-800 bg-cyan-50 border-cyan-200 dark:bg-cyan-900/30 dark:border-cyan-800 dark:text-cyan-400' },
   { id: 'glass', title: t.badgeGlass, desc: t.badgeGlassDesc, icon: Zap, req: 20, cur: matCounts.glass || 0, color: 'text-emerald-500', colorClass: 'text-emerald-800 bg-emerald-50 border-emerald-200 dark:bg-emerald-800 dark:text-emerald-400' },
+  { id: 'tin', title: t.badgeTin, desc: t.badgeTinDesc, icon: Award, req: 20, cur: matCounts.tin || 0, color: 'text-rose-500', colorClass: 'text-rose-800 bg-rose-50 border-rose-200 dark:bg-rose-900/30 dark:border-rose-800 dark:text-rose-400' },
+  { id: 'paper', title: t.badgePaper, desc: t.badgePaperDesc, icon: Leaf, req: 20, cur: matCounts.paper || 0, color: 'text-lime-600', colorClass: 'text-lime-800 bg-lime-50 border-lime-200 dark:bg-lime-900/30 dark:border-lime-800 dark:text-lime-400' },
 ];
+
+// Lifetime levels shown next to names on the leaderboard (thresholds = items).
+const LEVELS = [
+  { min: 75, icon: '🌲', en: 'Forest', bg: 'Гора' },
+  { min: 30, icon: '🌳', en: 'Tree', bg: 'Дърво' },
+  { min: 10, icon: '🌿', en: 'Sprout', bg: 'Стрък' },
+  { min: 1, icon: '🌱', en: 'Seedling', bg: 'Кълн' },
+];
+const getLevel = (items, lang) => {
+  const l = LEVELS.find(lv => items >= lv.min);
+  return l ? { icon: l.icon, name: l[lang] || l.en } : null;
+};
 
 const parseTimestamp = (ts) => {
   if (!ts) return new Date();
@@ -517,6 +567,7 @@ export default function App() {
   const [impactCfg, setImpactCfg] = useState(DEFAULT_IMPACT_CFG); // synced via config/list (impact_json)
   const [impactDraft, setImpactDraft] = useState(null);           // admin editor working copy
   const [analyticsData, setAnalyticsData] = useState(null);       // admin: per-user waste profiles
+  const [binCaps, setBinCaps] = useState({});                     // admin: capacity input drafts
   const [snapshot, setSnapshot] = useState(null);        // { src, ts, detections } | { error }
   const [snapshotPending, setSnapshotPending] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(false);
@@ -801,6 +852,11 @@ export default function App() {
               break;
             case 'analytics_export': {
               const rows = Array.isArray(data.rows) ? data.rows : [];
+              if (pendingReportRef.current) {
+                pendingReportRef.current = false;
+                buildReportRef.current?.(rows);
+                break;
+              }
               const header = 'id,timestamp,iso_time,user_code,department,material,points\n';
               const body = rows.map(r => {
                 const iso = new Date((Number(r[1]) || 0) * 1000).toISOString();
@@ -1072,7 +1128,7 @@ export default function App() {
     if (myTxs.length === 0) return;
     const matCounts = { plastic: 0, glass: 0, tin: 0, paper: 0 };
     myTxs.forEach(tx => { matCounts[tx.material] = (matCounts[tx.material] || 0) + 1; });
-    const achievementsList = getAchievementsData(myTxs.length, matCounts, t);
+    const achievementsList = getAchievementsData(myTxs.length, matCounts, t, stats?.streaks?.[loggedInUser] || 0);
     const unlockedNow = achievementsList.filter(a => a.cur >= a.req).map(a => a.id);
     const seenKey = `milo_achievements_seen_${loggedInUser}`;
     const seenIds = JSON.parse(localStorage.getItem(seenKey) || '[]');
@@ -1082,7 +1138,7 @@ export default function App() {
       setNewAchievementQueue(prev => [...prev, ...newAchs]);
       localStorage.setItem(seenKey, JSON.stringify([...seenIds, ...newlyUnlockedIds]));
     }
-  }, [safeTransactions, loggedInUser, t]);
+  }, [safeTransactions, loggedInUser, t, stats]);
 
   // ==========================================
   // ACTION HANDLERS
@@ -1254,8 +1310,69 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, adminTab, adminToken, isConnected]);
 
+  const pendingReportRef = useRef(false);   // next analytics_export reply becomes a report, not a CSV
+  const buildReportRef = useRef(null);      // latest report builder (fresh state for the MQTT handler)
+
   const downloadDataset = () => {
+    pendingReportRef.current = false;
     pub(`${NS}/analytics/export`, JSON.stringify({ admin_token: adminToken, client_id: clientIdRef.current }));
+  };
+
+  const downloadMonthlyReport = () => {
+    pendingReportRef.current = true;
+    pub(`${NS}/analytics/export`, JSON.stringify({ admin_token: adminToken, client_id: clientIdRef.current }));
+  };
+
+  // Monthly operator report: aggregates the exported dataset's last 30 days
+  // into a printable standalone HTML file.
+  buildReportRef.current = (rows) => {
+    const since = Date.now() / 1000 - 30 * 86400;
+    const recent = rows.filter(r => Number(r[1]) >= since);
+    const mats = {}; const usersAgg = {}; const teamsAgg = {};
+    recent.forEach(r => {
+      mats[r[4]] = (mats[r[4]] || 0) + 1;
+      const u = usersAgg[r[2]] = usersAgg[r[2]] || { items: 0, points: 0 };
+      u.items += 1; u.points += r[5] || 0;
+      if (r[3]) {
+        const tm = teamsAgg[r[3]] = teamsAgg[r[3]] || { items: 0, points: 0 };
+        tm.items += 1; tm.points += r[5] || 0;
+      }
+    });
+    const imp = impactFrom(mats, impactCfg.factors);
+    const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const matRows = Object.entries(mats).sort((a, b) => b[1] - a[1]).map(([m, n]) => `<tr><td style="text-transform:capitalize">${esc(m)}</td><td>${n}</td></tr>`).join('');
+    const userRows = Object.entries(usersAgg).sort((a, b) => b[1].points - a[1].points).slice(0, 10)
+      .map(([c, v], i) => `<tr><td>${i + 1}</td><td>${esc(safeUsers[c]?.name || c)}</td><td>${v.items}</td><td>${v.points}</td></tr>`).join('');
+    const teamRows = Object.entries(teamsAgg).sort((a, b) => b[1].points - a[1].points).slice(0, 5)
+      .map(([nm, v], i) => `<tr><td>${i + 1}</td><td>${esc(nm)}</td><td>${v.items}</td><td>${v.points}</td></tr>`).join('');
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(t.reportTitle)}</title>
+<style>body{font-family:system-ui,sans-serif;max-width:800px;margin:2rem auto;padding:0 1rem;color:#1e293b}
+h1{margin-bottom:.25rem}table{border-collapse:collapse;width:100%;margin:1rem 0}
+td,th{border:1px solid #e2e8f0;padding:.5rem .75rem;text-align:left}th{background:#f1f5f9}
+.kpi{display:inline-block;background:#f1f5f9;border-radius:12px;padding:1rem 1.5rem;margin:.25rem;font-weight:700}</style></head><body>
+<h1>${esc(t.reportTitle)}</h1><p>${esc(t.reportPeriod)} · ${new Date().toLocaleDateString()}</p>
+<div><span class="kpi">${esc(t.kpiItems)}: ${recent.length}</span><span class="kpi">${esc(t.kpiActive)}: ${Object.keys(usersAgg).length}</span><span class="kpi">${esc(t.co2Saved)}: ${imp.co2.toFixed(1)} kg</span><span class="kpi">${esc(t.waterSaved)}: ${imp.water.toFixed(0)} L</span><span class="kpi">${esc(t.energySaved)}: ${imp.energy.toFixed(1)} kWh</span></div>
+<h2>${esc(t.impactBreakdown)}</h2><table><tr><th>${esc(t.materialCol)}</th><th>${esc(t.kpiItems)}</th></tr>${matRows}</table>
+<h2>${esc(t.leaderboard)}</h2><table><tr><th>#</th><th>${esc(t.fullName)}</th><th>${esc(t.kpiItems)}</th><th>${esc(t.points)}</th></tr>${userRows}</table>
+${teamRows ? `<h2>${esc(t.teamStandings)}</h2><table><tr><th>#</th><th></th><th>${esc(t.kpiItems)}</th><th>${esc(t.points)}</th></tr>${teamRows}</table>` : ''}
+<p style="color:#94a3b8;font-size:.8rem">${esc(t.impactDisclaimer)}</p>
+</body></html>`;
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'milo_monthly_report.html'; a.click();
+    window.URL.revokeObjectURL(url);
+  };
+
+  // --- Admin: bin fill management ---
+  const emptyBin = (m) => {
+    pub(`${NS}/bins/manage`, JSON.stringify({ action: 'empty', material: m, admin_token: adminToken }));
+  };
+  const saveBinCap = (m) => {
+    const c = parseInt(binCaps[m], 10);
+    if (!Number.isFinite(c) || c <= 0) return;
+    pub(`${NS}/bins/manage`, JSON.stringify({ action: 'capacity', material: m, capacity: c, admin_token: adminToken }));
+    setBinCaps(prev => { const n = { ...prev }; delete n[m]; return n; });
   };
 
   // --- Rewards ---
@@ -1501,12 +1618,21 @@ export default function App() {
     const uName = safeUsers[activePopup.user_code]?.name || t.unnamedUser;
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in" role="status" aria-live="polite">
-        {th.confetti && <Confetti count={orgType === 'school' ? 60 : 25} />}
-        <div className={`bg-white dark:bg-slate-800 ${th.card} shadow-2xl p-8 max-w-sm w-full text-center border-4 ${orgType === 'school' ? 'border-violet-500' : orgType === 'city' ? 'border-emerald-600' : 'border-indigo-500'} transform transition-all animate-bounce-in`}>
+        {(th.confetti || activePopup.lucky) && <Confetti count={activePopup.lucky ? 90 : orgType === 'school' ? 60 : 25} />}
+        <div className={`bg-white dark:bg-slate-800 ${th.card} shadow-2xl p-8 max-w-sm w-full text-center border-4 ${activePopup.lucky ? 'border-amber-400' : orgType === 'school' ? 'border-violet-500' : orgType === 'city' ? 'border-emerald-600' : 'border-indigo-500'} transform transition-all animate-bounce-in`}>
           <div className={`mx-auto w-20 h-20 ${th.accentSoft} ${th.chip} flex items-center justify-center mb-6`}><Trophy className="w-10 h-10" /></div>
           <h2 className="text-2xl font-black text-slate-800 dark:text-white mb-2">{t.congrats}</h2>
           <p className="text-slate-600 dark:text-slate-300 text-lg mb-6"><span className={`font-bold ${th.accentText}`}>{uName}</span> {t.recycled} <span className="font-bold capitalize">{activePopup.material}</span>!</p>
           <div className={`bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 font-black text-3xl py-4 ${th.card}`}>+{activePopup.points} {t.points}</div>
+          {activePopup.lucky && (
+            <div className={`mt-3 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 font-black py-3 ${th.card} animate-bounce-in`}>🍀 {t.luckyTitle} <span className="block text-xs font-bold mt-1">{t.luckyDesc}</span></div>
+          )}
+          {activePopup.streak_bonus > 0 && (
+            <p className="mt-3 text-sm font-black text-orange-500 flex items-center justify-center gap-1"><Flame size={16} aria-hidden="true" /> {activePopup.streak} {t.streakLabel} · +{activePopup.streak_bonus} {t.streakBonusLbl}</p>
+          )}
+          {activePopup.challenge_bonus > 0 && (
+            <p className={`mt-3 text-sm font-black ${th.accentText} flex items-center justify-center gap-1`}><Target size={16} aria-hidden="true" /> {t.challengeDone} +{activePopup.challenge_bonus}</p>
+          )}
         </div>
       </div>
     );
@@ -1811,6 +1937,20 @@ export default function App() {
                 )}
               </div>
 
+              {/* Weekly challenge banner */}
+              {stats?.challenge && (
+                <div className={`${cardCls} ${th.cardPad} flex flex-wrap items-center justify-between gap-3`}>
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className={`${th.accentSoft} p-3 ${th.chip} shrink-0`}><Target size={22} aria-hidden="true" /></div>
+                    <div className="min-w-0">
+                      <p className="font-black text-slate-800 dark:text-slate-100">{t.challengeTitle}</p>
+                      <p className="text-sm text-slate-500 dark:text-slate-400 capitalize">{t.challengeDesc.replace('{target}', stats.challenge.target).replace('{material}', stats.challenge.material)}</p>
+                    </div>
+                  </div>
+                  <span className={`font-black text-lg ${th.accentText} shrink-0`}>{t.challengeReward.replace('{bonus}', stats.challenge.bonus)} {t.points.toLowerCase()}</span>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className={`${th.heroGrad} ${th.card} p-6 text-white shadow-lg relative overflow-hidden`}>
                   <div className="absolute top-0 right-0 p-4 opacity-20">
@@ -1868,7 +2008,10 @@ export default function App() {
                             <div className={`shrink-0 w-10 h-10 md:w-12 md:h-12 ${th.chip} flex items-center justify-center font-bold ${rankColor} shadow-sm transition-transform duration-500 ${isHighlighted ? 'scale-110' : ''}`}><RankIcon /></div>
                             <div>
                               <h3 className="font-bold text-slate-800 dark:text-slate-100 text-base md:text-lg flex items-center gap-2 flex-wrap">
-                                {userInfo.name} {!safeUsers[userStats.code] && <span className={`text-[10px] uppercase bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-300 px-2 py-1 ${th.chip} shrink-0`}>{t.new}</span>}
+                                {userInfo.name}
+                                {(() => { const lv = getLevel(userStats.items, lang); return lv && <span title={lv.name} aria-label={lv.name} className="text-sm shrink-0">{lv.icon}</span>; })()}
+                                {(stats?.streaks?.[userStats.code] || 0) >= 2 && <span className="text-[11px] font-black text-orange-500 shrink-0">🔥{stats.streaks[userStats.code]}</span>}
+                                {!safeUsers[userStats.code] && <span className={`text-[10px] uppercase bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-300 px-2 py-1 ${th.chip} shrink-0`}>{t.new}</span>}
                               </h3>
                               <p className="text-xs md:text-sm text-slate-500 dark:text-slate-400">{userInfo.department}</p>
                             </div>
@@ -1909,6 +2052,24 @@ export default function App() {
                       {teamBoard.length === 0 && <p className="p-6 text-sm text-slate-400 text-center">{t.dbEmpty}</p>}
                     </div>
                   </div>
+
+                  {/* Trophy cabinet: past weekly season winners */}
+                  {Array.isArray(stats?.seasons) && stats.seasons.length > 0 && (
+                    <div className={`${cardCls} overflow-hidden h-fit`}>
+                      <div className={`${th.dense ? 'p-4' : 'p-4 md:p-5'} border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50`}>
+                        <h2 className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><Trophy size={18} className="text-amber-500" aria-hidden="true" /> {t.trophyCabinet}</h2>
+                      </div>
+                      <div className="divide-y divide-slate-100 dark:divide-slate-700/50">
+                        {stats.seasons.slice(0, 6).map(s => (
+                          <div key={s.week_start} className={`${th.dense ? 'p-3' : 'p-4'} text-sm`}>
+                            <p className="text-[11px] text-slate-400 font-semibold mb-1">{t.weekOf} {new Date(s.week_start * 1000).toLocaleDateString()}</p>
+                            {s.team && <p className="font-bold text-slate-800 dark:text-slate-100">🏆 {s.team} <span className={`${th.accentText} font-black`}>{s.team_points}</span></p>}
+                            <p className="text-slate-600 dark:text-slate-300">⭐ {s.user_name || s.user_code} <span className={`${th.accentText} font-black`}>{s.user_points}</span></p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Activity feed */}
                   <div className={`${cardCls} overflow-hidden h-fit`}>
@@ -2147,6 +2308,7 @@ export default function App() {
                       <h2 className="text-2xl font-black text-slate-800 dark:text-white truncate">{t.welcome}, {safeUsers[loggedInUser]?.name || 'User'}!</h2>
                       <p className="text-slate-500 dark:text-slate-400">ID: {loggedInUser} {safeUsers[loggedInUser]?.department ? `• ${safeUsers[loggedInUser].department}` : ''}</p>
                       {!sessionPassword && !sessionToken && <p className="text-xs text-rose-500 mt-1 font-semibold flex items-center gap-1"><AlertTriangle size={12} aria-hidden="true" /> {t.reEnterPass}</p>}
+                      {(stats?.streaks?.[loggedInUser] || 0) >= 2 && <p className="text-xs font-black text-orange-500 mt-1 flex items-center gap-1"><Flame size={12} aria-hidden="true" /> {stats.streaks[loggedInUser]} {t.streakLabel}</p>}
                     </div>
                   </div>
                   <button type="button" onClick={logoutUser} aria-label={t.logout} className={`flex items-center gap-2 bg-rose-50 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400 px-4 py-2 ${th.btnShape} font-bold hover:bg-rose-100 dark:hover:bg-rose-900/50 transition-colors shrink-0`}><LogOut size={16} aria-hidden="true" /> <span className="hidden sm:inline">{t.logout}</span></button>
@@ -2160,6 +2322,21 @@ export default function App() {
                 </div>
 
                 {hubTab === 'overview' && (<>
+                {/* Rank nudge: how close you are to the person above you */}
+                {(() => {
+                  const idx = allTimeUsers.findIndex(u => u.code === loggedInUser);
+                  if (idx < 0) return null;
+                  if (idx === 0) return (
+                    <div className={`${cardCls} p-4 font-bold text-amber-700 dark:text-amber-400 flex items-center gap-2 border-amber-200 dark:border-amber-700/50`}><Trophy size={18} aria-hidden="true" /> {t.nudgeTop}</div>
+                  );
+                  const ahead = allTimeUsers[idx - 1];
+                  const gap = ahead.totalPoints - myEarned + 1;
+                  const nm = safeUsers[ahead.code]?.name || ahead.code;
+                  return (
+                    <div className={`${cardCls} p-4 font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-2`}><Flame size={18} className="text-orange-500 shrink-0" aria-hidden="true" /> {t.nudgeText.replace('{points}', gap).replace('{name}', nm)}</div>
+                  );
+                })()}
+
                 {/* Stats */}
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                   <div className={`${th.heroGrad} ${th.card} p-6 text-white shadow-lg`}><h3 className="font-semibold text-white/80">{t.personalStats}</h3><p className="text-5xl font-black mt-2"><AnimatedNumber value={myEarned} /></p><p className="text-sm text-white/70 mt-1 uppercase tracking-wider font-bold">{t.points}</p></div>
@@ -2168,13 +2345,38 @@ export default function App() {
                   <div className={`${cardCls} p-6`}><h3 className="font-semibold text-slate-500 dark:text-slate-400">{t.totalRecycled}</h3><p className="text-4xl font-bold mt-2 text-slate-800 dark:text-white">{myItems}</p></div>
                 </div>
 
+                {/* Weekly challenge progress */}
+                {stats?.challenge && (() => {
+                  const ch = stats.challenge;
+                  const count = safeTransactions.filter(tx => {
+                    const tsec = Number(tx.timestamp) < 1e10 ? Number(tx.timestamp) : Number(tx.timestamp) / 1000;
+                    return tx.user_code === loggedInUser && tx.material === ch.material && tsec >= weekStart;
+                  }).length;
+                  const done = count >= ch.target;
+                  return (
+                    <div className={`${cardCls} ${th.cardPad}`}>
+                      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                        <h2 className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><Target size={18} className={th.accentText} aria-hidden="true" /> {t.challengeTitle}</h2>
+                        <span className={`font-black ${done ? 'text-emerald-500' : th.accentText}`}>{done ? `✓ ${t.challengeDone}` : t.challengeReward.replace('{bonus}', ch.bonus)}</span>
+                      </div>
+                      <p className="text-sm text-slate-500 dark:text-slate-400 capitalize mb-3">{t.challengeDesc.replace('{target}', ch.target).replace('{material}', ch.material)}</p>
+                      <div className="flex items-center gap-3">
+                        <div className="flex-1 bg-slate-200 dark:bg-slate-700 rounded-full h-4 overflow-hidden">
+                          <div className={`h-4 rounded-full transition-all duration-700 ${done ? 'bg-emerald-500' : orgType === 'school' ? 'bg-violet-500' : orgType === 'city' ? 'bg-emerald-600' : 'bg-indigo-500'}`} style={{ width: `${Math.min(100, (count / ch.target) * 100)}%` }}></div>
+                        </div>
+                        <span className="text-sm font-black text-slate-700 dark:text-slate-200 shrink-0">{Math.min(count, ch.target)} / {ch.target}</span>
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* Personal environmental impact + achievements */}
                 {(() => {
                   const myTxs = safeTransactions.filter(tx => tx.user_code === loggedInUser);
                   const matCounts = { plastic: 0, glass: 0, tin: 0, paper: 0 };
                   myTxs.forEach(tx => { matCounts[tx.material] = (matCounts[tx.material] || 0) + 1; });
                   const my = impactFrom(matCounts, impactCfg.factors);
-                  const achievementsList = getAchievementsData(myTxs.length, matCounts, t);
+                  const achievementsList = getAchievementsData(myTxs.length, matCounts, t, stats?.streaks?.[loggedInUser] || 0);
                   return (
                     <>
                       <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2 mt-4 mb-2"><Leaf size={20} className="text-emerald-500" aria-hidden="true" /> {t.environmentalImpact}</h2>
@@ -2486,7 +2688,7 @@ export default function App() {
                           {Object.entries(hardwareErrors).map(([errName, errTimestamp]) => (
                             <div key={errName} className={`p-4 bg-rose-50 dark:bg-rose-900/20 text-rose-700 dark:text-rose-400 ${th.card} border border-rose-200 dark:border-rose-800 flex items-start gap-3 text-sm font-semibold animate-shake`} role="alert">
                               <AlertTriangle size={18} className="mt-0.5 shrink-0" aria-hidden="true" />
-                              <div><p>{(errName || "").includes("FAN1_STALL") ? t.fan1Error : (errName || "").includes("FAN2_STALL") ? t.fan2Error : (errName || "").includes("FAN_STALL") ? t.fanError : errName}</p><p className="text-xs text-rose-500/70 mt-1 font-normal">{parseTimestamp(errTimestamp).toLocaleString()}</p></div>
+                              <div><p>{(errName || "").includes("FAN1_STALL") ? t.fan1Error : (errName || "").includes("FAN2_STALL") ? t.fan2Error : (errName || "").includes("FAN_STALL") ? t.fanError : (errName || "").startsWith("BIN_FULL") ? `${t.binFull}: ${(errName.split(':')[1] || '')}` : errName}</p><p className="text-xs text-rose-500/70 mt-1 font-normal">{parseTimestamp(errTimestamp).toLocaleString()}</p></div>
                             </div>
                           ))}
                         </div>
@@ -2575,6 +2777,40 @@ export default function App() {
                           </div>
                         )}
                       </div>
+                    </div>
+
+                    {/* Bin fill levels: derived from deposit counts, reset on empty */}
+                    <div className={`${cardCls} ${th.cardPad}`}>
+                      <h2 className="text-lg md:text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2 mb-4"><Trash2 className={th.accentText} aria-hidden="true" /> {t.binLevels}</h2>
+                      {stats?.bins ? (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          {Object.entries(stats.bins).map(([m, b]) => {
+                            const barColor = b.pct >= 90 ? 'bg-rose-500' : b.pct >= 60 ? 'bg-amber-500' : 'bg-emerald-500';
+                            return (
+                              <div key={m} className={`bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-700 ${th.card} p-4`}>
+                                <div className="flex items-center justify-between mb-2">
+                                  <p className="font-bold capitalize text-slate-800 dark:text-slate-100">{m}</p>
+                                  <p className={`font-black text-sm ${b.pct >= 90 ? 'text-rose-500' : 'text-slate-500 dark:text-slate-400'}`}>{b.pct}% · {b.count}/{b.capacity}</p>
+                                </div>
+                                <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-3 overflow-hidden mb-3">
+                                  <div className={`h-3 rounded-full transition-all duration-700 ${barColor}`} style={{ width: `${b.pct}%` }}></div>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <button type="button" onClick={() => emptyBin(m)} disabled={!isConnected} className={`bg-emerald-600 hover:bg-emerald-500 text-white ${th.btnShape} px-3 py-2 text-xs font-bold transition-colors disabled:opacity-50`}>{t.binEmptied}</button>
+                                  <input type="number" min="1" aria-label={`${m} ${t.binCapacityLbl}`} placeholder={t.binCapacityLbl}
+                                         className={`${fieldChrome} px-2 h-9 w-24 text-sm`} value={binCaps[m] ?? String(b.capacity ?? '')}
+                                         onChange={e => setBinCaps(prev => ({ ...prev, [m]: e.target.value }))} />
+                                  {binCaps[m] !== undefined && binCaps[m] !== String(b.capacity) && (
+                                    <button type="button" onClick={() => saveBinCap(m)} className={`${th.accentBtn} ${th.btnShape} px-3 py-2 text-xs font-bold`}>{t.saveSettings}</button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-slate-400">{t.dbEmpty}</p>
+                      )}
                     </div>
 
                     {/* Environmental impact settings: per-item factors + "equals to" rates */}
@@ -2762,7 +2998,10 @@ export default function App() {
                   <div className={`${cardCls} ${th.cardPad} animate-fade-in`}>
                     <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
                       <h2 className="text-lg md:text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><Activity className={th.accentText} aria-hidden="true" /> {t.analyticsTitle}</h2>
-                      <button type="button" onClick={downloadDataset} disabled={!isConnected} className={`${btnPrimary} px-4 py-2 text-sm flex items-center gap-2 disabled:opacity-50`}><Download size={14} aria-hidden="true" /> {t.downloadDataset}</button>
+                      <div className="flex flex-wrap gap-2">
+                        <button type="button" onClick={downloadDataset} disabled={!isConnected} className={`${btnPrimary} px-4 py-2 text-sm flex items-center gap-2 disabled:opacity-50`}><Download size={14} aria-hidden="true" /> {t.downloadDataset}</button>
+                        <button type="button" onClick={downloadMonthlyReport} disabled={!isConnected} className={`bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 ${th.btnShape} font-bold px-4 py-2 text-sm flex items-center gap-2 transition-colors disabled:opacity-50`}><FileDown size={14} aria-hidden="true" /> {t.monthlyReport}</button>
+                      </div>
                     </div>
                     <p className="text-xs text-slate-400 mb-4">{t.analyticsNote}</p>
                     {analyticsData === null ? (
