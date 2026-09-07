@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "node scripts/sync-recovery.mjs",
+    "sync:recovery": "node scripts/sync-recovery.mjs",
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview"

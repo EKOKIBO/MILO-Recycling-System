@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  milo — the one command a technician needs to remember
+#
+#    milo status | doctor | logs | restart | update | rollback
+#    milo backup | restore | config | ui | version | help
+# =============================================================================
+set -uo pipefail
+
+MILO_ROOT="${MILO_ROOT:-/opt/milo}"
+CONFIG_FILE="${MILO_ROOT}/data/config.env"
+[[ -f "$CONFIG_FILE" ]] && set -a && . "$CONFIG_FILE" 2>/dev/null && set +a
+
+ROLE="${MILO_ROLE:-both}"
+MAIN_UNIT="milo-core.service"; [[ "$ROLE" == "edge" ]] && MAIN_UNIT="milo-edge.service"
+need_root() { [[ ${EUID} -eq 0 ]] || { echo "This needs sudo:  sudo milo $*" >&2; exit 1; }; }
+
+case "${1:-status}" in
+  status)
+    systemctl status "$MAIN_UNIT" --no-pager -n 12 2>/dev/null || echo "Not installed."
+    ;;
+  doctor|health|check)
+    exec milo-doctor "${@:2}"
+    ;;
+  logs)
+    shift; FOLLOW="-f"; [[ "${1:-}" == "--no-follow" ]] && FOLLOW=""
+    journalctl -u "$MAIN_UNIT" -n 100 $FOLLOW --no-pager
+    ;;
+  restart)
+    need_root restart
+    systemctl restart "$MAIN_UNIT" && echo "Restarted ${MAIN_UNIT}"
+    ;;
+  stop)    need_root stop;  systemctl stop "$MAIN_UNIT" && echo "Stopped" ;;
+  start)   need_root start; systemctl start "$MAIN_UNIT" && echo "Started" ;;
+  update)  need_root update;  exec milo-update "${@:2}" ;;
+  rollback) need_root rollback; exec milo-update --rollback ;;
+  backup)  need_root backup;  exec milo-backup "${@:2}" ;;
+  restore) need_root restore; exec milo-backup --restore "${2:-}" ;;
+  config)
+    need_root config
+    "${EDITOR:-nano}" "$CONFIG_FILE"
+    echo "Restart to apply:  sudo milo restart"
+    ;;
+  ui)
+    IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    echo "Repair UI: http://${IP:-<pi-ip>}:${MILO_UI_PORT:-8088}"
+    echo "PIN:       ${MILO_UI_PIN:-<see ${CONFIG_FILE}>}"
+    ;;
+  version)
+    CUR_T="$(readlink -f "${MILO_ROOT}/current" 2>/dev/null || true)"
+    [[ -n "$CUR_T" && -d "$CUR_T" ]] && CUR_V="$(basename "$CUR_T")" || CUR_V="not installed"
+    echo "Release:  ${CUR_V}"
+    echo "Machine:  ${MILO_MACHINE_ID:-?} (${MILO_MACHINE_NAME:-?})"
+    echo "Role:     ${ROLE}"
+    ;;
+  help|--help|-h|*)
+    cat <<EOF
+MILO technician commands
+
+  milo status              is it running?
+  milo doctor              full health check (add --heal to auto-fix)
+  milo logs                live log output (Ctrl-C to stop)
+  milo restart             restart the application
+  milo update              check for and install updates
+  milo rollback            return to the previous version
+  milo backup              snapshot the database now
+  milo backup --list       show snapshots
+  milo restore FILE        restore a snapshot
+  milo config              edit configuration
+  milo ui                  show the repair UI address and PIN
+  milo version             what is installed here
+
+Full rebuild:  curl -fsSL ${MILO_SITE:-<your-site>}/recovery/install.sh | sudo bash
+EOF
+    ;;
+esac

@@ -1,0 +1,73 @@
+{
+  "kit": "MILO Recovery & Install Kit",
+  "version": "2026-07-23.1",
+  "repo": "EKOKIBO/MILO-Backend",
+  "site": "",
+  "generated_at": "2026-09-07T08:30:39.840Z",
+  "install_command": "",
+  "files": [
+    {
+      "file": "kit.conf",
+      "title": "Kit settings",
+      "description": "Your repository, site and model addresses.",
+      "bytes": 2108,
+      "sha256": "47be6930ddc950d2e6c792da2daaf93652cb73bf826c0f3f61d044209ccaa815"
+    },
+    {
+      "file": "install.sh",
+      "title": "Installer & repair tool",
+      "description": "Rebuilds a machine from scratch, or repairs a broken one.",
+      "bytes": 40760,
+      "sha256": "7ab0085aff3138c7b937219773e5523b50f38cece140aec6e686df5a25d9051a"
+    },
+    {
+      "file": "milo-doctor.sh",
+      "title": "Diagnostics",
+      "description": "Health check with automatic repair.",
+      "bytes": 11863,
+      "sha256": "e2f10ccf9ffe145afe94c42b80a81853babd82e70bbe383bd1b7fec8e91e1701"
+    },
+    {
+      "file": "milo-update.sh",
+      "title": "Update agent",
+      "description": "Over-the-air updates with automatic rollback.",
+      "bytes": 10537,
+      "sha256": "989739f3fbb8700c5c741df31c5a8d70d3ea7de4a5500e6370feef4a6f481345"
+    },
+    {
+      "file": "milo-backup.sh",
+      "title": "Backup & restore",
+      "description": "Database snapshots, rotation and restore.",
+      "bytes": 4776,
+      "sha256": "17aa538037fdbae81cff96fb38a99caffc1ed21608df502b6d3fc3dfeb71d2b2"
+    },
+    {
+      "file": "milo-bundle.sh",
+      "title": "Offline bundle builder",
+      "description": "Builds a USB-stick recovery bundle.",
+      "bytes": 3541,
+      "sha256": "30f7b434da246e0c29da3ec91f052e8ea5335e37abbb76991182559171f04609"
+    },
+    {
+      "file": "milo-config-ui.py",
+      "title": "Repair UI",
+      "description": "The on-device web interface.",
+      "bytes": 29457,
+      "sha256": "1d2241cdbd8eebd20203eb2df79f1f82ae0ad6bd525600d39f31ba9a432097fd"
+    },
+    {
+      "file": "milo",
+      "title": "milo command",
+      "description": "The technician command-line tool.",
+      "bytes": 3012,
+      "sha256": "15dc627c58ca9610a149502cf55a700adac1da5215fbafdd5bdc94fd55dc8b91"
+    },
+    {
+      "file": "RECOVERY.md",
+      "title": "Technician handbook",
+      "description": "Every recovery scenario, step by step.",
+      "bytes": 8462,
+      "sha256": "7c42300e2439bccef8b132de46eb20845fedef539d756324818b9ba0b13db408"
+    }
+  ]
+}
