@@ -2,7 +2,7 @@
 // the web app can hand technicians the exact scripts that match this build.
 //
 // Runs automatically before every `npm run build` (see package.json prebuild),
-// which keeps ONE source of truth: backend/MILO-Backend-main/deploy/.
+// which keeps ONE source of truth in MILO-Backend/deploy/.
 //
 // After deploying the frontend, the installer is live at:
 //     https://<your-domain>/recovery/install.sh
@@ -13,7 +13,13 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SRC = resolve(here, '../../backend/MILO-Backend-main/deploy');
+const CANDIDATE_SRCS = [
+  resolve(here, '../../MILO-Backend-main/deploy'),
+  resolve(here, '../../MILO-Backend/deploy'),
+  resolve(here, '../../backend/MILO-Backend-main/deploy'),
+  resolve(here, '../../backend/deploy'),
+];
+const SRC = CANDIDATE_SRCS.find(p => existsSync(p)) || CANDIDATE_SRCS[0];
 const DEST = resolve(here, '../public/recovery');
 
 const FILES = [
@@ -29,7 +35,7 @@ const FILES = [
 ];
 
 if (!existsSync(SRC)) {
-  console.warn(`[recovery] ${SRC} not found — skipping (frontend-only checkout?)`);
+  console.warn(`[recovery] Backend deploy directory not found — skipping (frontend-only checkout?)`);
   process.exit(0);
 }
 

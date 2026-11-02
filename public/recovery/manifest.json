@@ -1,24 +1,24 @@
 {
   "kit": "MILO Recovery & Install Kit",
-  "version": "2026-07-23.1",
+  "version": "2026-11-02.1",
   "repo": "EKOKIBO/MILO-Backend",
-  "site": "",
-  "generated_at": "2026-09-07T08:30:39.840Z",
-  "install_command": "",
+  "site": "https://milo-robotics.org",
+  "generated_at": "2026-11-02T12:00:30.312Z",
+  "install_command": "curl -fsSL https://milo-robotics.org/recovery/install.sh | sudo bash",
   "files": [
     {
       "file": "kit.conf",
       "title": "Kit settings",
       "description": "Your repository, site and model addresses.",
-      "bytes": 2108,
-      "sha256": "47be6930ddc950d2e6c792da2daaf93652cb73bf826c0f3f61d044209ccaa815"
+      "bytes": 2133,
+      "sha256": "15ca4806ecf2d60bbc6eab4804f32fa8ecbbbf807c261e36d651b80a05c24060"
     },
     {
       "file": "install.sh",
       "title": "Installer & repair tool",
       "description": "Rebuilds a machine from scratch, or repairs a broken one.",
-      "bytes": 40760,
-      "sha256": "7ab0085aff3138c7b937219773e5523b50f38cece140aec6e686df5a25d9051a"
+      "bytes": 40215,
+      "sha256": "9ac9aa8736fbcd6a1eb0bf2d6533a448d9fdbf07aefb539a8cdd2a2395b22c63"
     },
     {
       "file": "milo-doctor.sh",
@@ -31,8 +31,8 @@
       "file": "milo-update.sh",
       "title": "Update agent",
       "description": "Over-the-air updates with automatic rollback.",
-      "bytes": 10537,
-      "sha256": "989739f3fbb8700c5c741df31c5a8d70d3ea7de4a5500e6370feef4a6f481345"
+      "bytes": 10768,
+      "sha256": "b3f53ffdcc46244439085561772c56ab31b46f3f1f4cc16de879189d355c8f21"
     },
     {
       "file": "milo-backup.sh",
@@ -45,15 +45,15 @@
       "file": "milo-bundle.sh",
       "title": "Offline bundle builder",
       "description": "Builds a USB-stick recovery bundle.",
-      "bytes": 3541,
-      "sha256": "30f7b434da246e0c29da3ec91f052e8ea5335e37abbb76991182559171f04609"
+      "bytes": 3570,
+      "sha256": "51930a0437af7b299c9f3804527ca5381b247e6d02090eb3e0314ccda3936a33"
     },
     {
       "file": "milo-config-ui.py",
       "title": "Repair UI",
       "description": "The on-device web interface.",
-      "bytes": 29457,
-      "sha256": "1d2241cdbd8eebd20203eb2df79f1f82ae0ad6bd525600d39f31ba9a432097fd"
+      "bytes": 33164,
+      "sha256": "573b83b3a5e7620d0a3bbce23ee1b13b46940d9d5865cc81c391c3cff3acde40"
     },
     {
       "file": "milo",

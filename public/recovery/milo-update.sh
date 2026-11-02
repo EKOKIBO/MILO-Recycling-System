@@ -159,8 +159,15 @@ PY="${MILO_ROOT}/venv/bin/python"
   || fail "New code failed a syntax check — update aborted, nothing changed"
 
 NEW_VER="$(grep -oP "BACKEND_BUILD\s*=\s*'\K[^']+" "${PAYLOAD}/milo-detect.py" 2>/dev/null || date +%Y-%m-%d.%H%M)"
-NEW_DIR="${RELEASES_DIR}/${NEW_VER}"
 PREV_TARGET="$(readlink -f "$CURRENT_LINK" 2>/dev/null || true)"
+NEW_DIR="${RELEASES_DIR}/${NEW_VER}"
+if [[ -n "$PREV_TARGET" && "$(readlink -f "$NEW_DIR" 2>/dev/null || echo "$NEW_DIR")" == "$PREV_TARGET" ]]; then
+  # Same BACKEND_BUILD string in a newer commit/release: suffix with short ref
+  # so we never overwrite PREV_TARGET in-place or delete it on rollback.
+  SHORT_REF="$(tr -cd 'A-Za-z0-9._-' <<<"${REF:0:7}")"
+  NEW_VER="${NEW_VER}-${SHORT_REF:-$(date +%H%M%S)}"
+  NEW_DIR="${RELEASES_DIR}/${NEW_VER}"
+fi
 
 # --- Back up the database before swapping ------------------------------------
 if command -v milo-backup >/dev/null 2>&1; then
@@ -214,7 +221,7 @@ if [[ -n "$PREV_TARGET" && -d "$PREV_TARGET" ]]; then
   systemctl is-active --quiet "$MAIN_UNIT" \
     && say "Rolled back successfully to $(current_version) — the machine is running the previous version" \
     || say "CRITICAL: rollback did not start either. Run: sudo bash install.sh --repair"
-  rm -rf "$NEW_DIR"
+  [[ "$NEW_DIR" != "$PREV_TARGET" ]] && rm -rf "$NEW_DIR"
 else
   say "CRITICAL: no previous release available. Run: sudo bash install.sh --repair"
 fi

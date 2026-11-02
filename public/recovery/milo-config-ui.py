@@ -342,73 +342,117 @@ PAGE = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
-<title>MILO · Repair & Configure</title>
+<title>MILO · Repair &amp; Configure</title>
+<script>
+  (() => {
+    const saved = localStorage.getItem('milo_repair_theme');
+    if (saved === 'light' || saved === 'dark') {
+      document.querySelector('meta[name="color-scheme"]').content = saved;
+    }
+  })();
+</script>
 <style>
   :root{
-    --bg:#f1f5f9; --card:#ffffff; --line:#e2e8f0; --text:#1e293b; --muted:#64748b;
+    color-scheme: light dark;
+    --bg:#f8fafc; --card:#ffffff; --card-glass:rgba(255,255,255,0.85); --line:#e2e8f0;
+    --text:#0f172a; --muted:#64748b;
     --accent:#4f46e5; --accent-soft:#eef2ff; --accent-text:#4338ca;
     --ok:#059669; --ok-soft:#ecfdf5; --warn:#d97706; --warn-soft:#fffbeb;
-    --err:#e11d48; --err-soft:#fff1f2; --radius:0.75rem;
+    --err:#e11d48; --err-soft:#fff1f2; --radius:1rem;
+    --shadow:0 4px 20px -2px rgba(15,23,42,.05), 0 1px 3px rgba(15,23,42,.04);
+    scrollbar-color: #94a3b8 transparent;
+    scrollbar-width: thin;
+    accent-color: var(--accent);
   }
   @media (prefers-color-scheme: dark){
-    :root{
-      --bg:#0f172a; --card:#1e293b; --line:#334155; --text:#f1f5f9; --muted:#94a3b8;
-      --accent:#6366f1; --accent-soft:#312e81; --accent-text:#c7d2fe;
-      --ok:#34d399; --ok-soft:#064e3b; --warn:#fbbf24; --warn-soft:#78350f;
-      --err:#fb7185; --err-soft:#881337;
+    :root:has(> head > meta[name="color-scheme"][content="light dark"]){
+      --bg:#0b1120; --card:#1e293b; --card-glass:rgba(30,41,59,0.85); --line:#334155;
+      --text:#f8fafc; --muted:#94a3b8;
+      --accent:#6366f1; --accent-soft:rgba(99,102,241,0.18); --accent-text:#c7d2fe;
+      --ok:#34d399; --ok-soft:rgba(16,185,129,0.16); --warn:#fbbf24; --warn-soft:rgba(245,158,11,0.16);
+      --err:#fb7185; --err-soft:rgba(244,63,94,0.18);
+      --shadow:0 8px 28px -4px rgba(0,0,0,.35);
+      scrollbar-color: #475569 transparent;
     }
   }
+  :root:has(> head > meta[name="color-scheme"][content="dark"]){
+    --bg:#0b1120; --card:#1e293b; --card-glass:rgba(30,41,59,0.85); --line:#334155;
+    --text:#f8fafc; --muted:#94a3b8;
+    --accent:#6366f1; --accent-soft:rgba(99,102,241,0.18); --accent-text:#c7d2fe;
+    --ok:#34d399; --ok-soft:rgba(16,185,129,0.16); --warn:#fbbf24; --warn-soft:rgba(245,158,11,0.16);
+    --err:#fb7185; --err-soft:rgba(244,63,94,0.18);
+    --shadow:0 8px 28px -4px rgba(0,0,0,.35);
+    scrollbar-color: #475569 transparent;
+  }
+  @supports not (scrollbar-color: auto) {
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 999px; }
+  }
+  ::selection { background-color: var(--accent); color: #ffffff; }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--text);
        font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
        -webkit-font-smoothing:antialiased;line-height:1.5}
-  .wrap{max-width:940px;margin:0 auto;padding:1rem 1rem 4rem}
-  header{position:sticky;top:0;z-index:10;background:var(--card);border-bottom:1px solid var(--line);
-         padding:.75rem 1rem;display:flex;align-items:center;gap:.75rem;flex-wrap:wrap}
-  .brand{display:flex;align-items:center;gap:.6rem}
-  .logo{width:38px;height:38px;border-radius:.6rem;background:linear-gradient(135deg,#4f46e5,#0ea5e9);
-        display:grid;place-items:center;color:#fff;font-weight:900;font-size:1rem;letter-spacing:-.5px}
+  .wrap{max-width:960px;margin:0 auto;padding:1.25rem 1rem 4rem}
+  header{position:sticky;top:0;z-index:20;background:var(--card-glass);
+         backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+         border-bottom:1px solid var(--line);
+         padding:.8rem 1.25rem;display:flex;align-items:center;gap:.75rem;flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:.65rem}
+  .logo{width:40px;height:40px;border-radius:.75rem;background:linear-gradient(135deg,#4f46e5,#0ea5e9);
+        display:grid;place-items:center;color:#fff;font-weight:900;font-size:1.05rem;letter-spacing:-.5px;
+        box-shadow:0 4px 12px rgba(79,70,229,.35)}
   h1{font-size:1.1rem;margin:0;font-weight:900;letter-spacing:-.02em}
   .sub{font-size:.62rem;text-transform:uppercase;letter-spacing:.12em;color:var(--accent-text);font-weight:800}
   .spacer{flex:1}
   .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
-        padding:1.25rem;margin-top:1rem;box-shadow:0 1px 2px rgba(0,0,0,.04)}
-  .card h2{font-size:1rem;margin:0 0 .9rem;display:flex;align-items:center;gap:.5rem;font-weight:800}
-  .row{display:flex;align-items:center;gap:.75rem;padding:.6rem 0;border-bottom:1px solid var(--line)}
+        padding:1.35rem;margin-top:1.1rem;box-shadow:var(--shadow);transition:border-color .15s}
+  .card h2{font-size:1rem;margin:0 0 .9rem;display:flex;align-items:center;gap:.5rem;font-weight:800;letter-spacing:-.01em}
+  .row{display:flex;align-items:center;gap:.75rem;padding:.65rem 0;border-bottom:1px solid var(--line)}
   .row:last-child{border-bottom:0}
-  .row .label{font-weight:600;flex:1;min-width:0}
-  .row .detail{color:var(--muted);font-size:.8rem;text-align:right;word-break:break-word}
-  .dot{width:9px;height:9px;border-radius:50%;flex:none}
-  .dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.fail{background:var(--err)}
-  .pill{display:inline-flex;align-items:center;gap:.4rem;padding:.3rem .7rem;border-radius:999px;
-        font-size:.75rem;font-weight:800}
+  .row .label{font-weight:600;flex:1;min-width:0;font-size:.9rem}
+  .row .detail{color:var(--muted);font-size:.82rem;text-align:right;word-break:break-word;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+  .dot{width:10px;height:10px;border-radius:50%;flex:none}
+  .dot.ok{background:var(--ok);box-shadow:0 0 0 3px var(--ok-soft)}
+  .dot.warn{background:var(--warn);box-shadow:0 0 0 3px var(--warn-soft)}
+  .dot.fail{background:var(--err);box-shadow:0 0 0 3px var(--err-soft)}
+  .pill{display:inline-flex;align-items:center;gap:.4rem;padding:.35rem .8rem;border-radius:999px;
+        font-size:.75rem;font-weight:800;letter-spacing:.01em}
   .pill.ok{background:var(--ok-soft);color:var(--ok)}
   .pill.warn{background:var(--warn-soft);color:var(--warn)}
   .pill.fail{background:var(--err-soft);color:var(--err)}
-  button{font:inherit;font-weight:700;border:0;border-radius:.55rem;padding:.6rem 1rem;cursor:pointer;
-         background:var(--accent);color:#fff;transition:filter .15s}
-  button:hover:not(:disabled){filter:brightness(1.1)}
+  button{font:inherit;font-weight:700;font-size:.86rem;border:0;border-radius:.65rem;padding:.65rem 1.05rem;cursor:pointer;
+         background:var(--accent);color:#fff;transition:transform .1s,filter .15s,background-color .15s}
+  button:hover:not(:disabled){filter:brightness(1.08)}
+  button:active:not(:disabled){transform:scale(0.98)}
   button:disabled{opacity:.5;cursor:not-allowed}
   button.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}
+  button.ghost:hover:not(:disabled){background:var(--accent-soft);border-color:var(--accent-text)}
   button.danger{background:var(--err)}
   button.ok{background:var(--ok)}
-  .btns{display:flex;flex-wrap:wrap;gap:.5rem}
-  input,select{font:inherit;width:100%;padding:.6rem .7rem;border-radius:.55rem;border:1px solid var(--line);
-               background:var(--bg);color:var(--text)}
-  label{display:block;font-size:.72rem;font-weight:700;color:var(--muted);margin-bottom:.3rem;
-        text-transform:uppercase;letter-spacing:.05em}
-  .grid{display:grid;gap:.9rem;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+  .btns{display:flex;flex-wrap:wrap;gap:.55rem}
+  input,select{font:inherit;width:100%;padding:.65rem .75rem;border-radius:.65rem;border:1px solid var(--line);
+               background:var(--bg);color:var(--text);transition:border-color .15s,box-shadow .15s}
+  input:focus,select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  input:not(input[type="range"]):user-invalid{border-color:var(--err);box-shadow:0 0 0 3px var(--err-soft)}
+  label{display:block;font-size:.7rem;font-weight:800;color:var(--muted);margin-bottom:.35rem;
+        text-transform:uppercase;letter-spacing:.06em}
+  .grid{display:grid;gap:.95rem;grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
   .muted{color:var(--muted);font-size:.82rem}
-  pre{background:var(--bg);border:1px solid var(--line);border-radius:.55rem;padding:.8rem;
-      overflow:auto;max-height:340px;font-size:.74rem;white-space:pre-wrap;word-break:break-word;margin:0}
+  pre{background:var(--bg);border:1px solid var(--line);border-radius:.65rem;padding:.9rem;
+      overflow:auto;max-height:360px;font-size:.75rem;white-space:pre-wrap;word-break:break-word;margin:0;
+      font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
   .center{min-height:100vh;display:grid;place-items:center;padding:1rem}
-  .login{width:100%;max-width:340px;text-align:center}
-  .login .logo{margin:0 auto 1rem;width:56px;height:56px;font-size:1.4rem;border-radius:1rem}
+  .login{width:100%;max-width:360px;text-align:center}
+  .login .logo{margin:0 auto 1rem;width:58px;height:58px;font-size:1.5rem;border-radius:1.1rem}
   .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:1.5rem;z-index:50;
-         background:var(--card);border:1px solid var(--line);border-radius:.7rem;padding:.7rem 1.1rem;
-         box-shadow:0 8px 24px rgba(0,0,0,.18);font-weight:700;font-size:.86rem;max-width:90vw}
-  .spin{display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;
-        border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px}
+         background:var(--card);border:1px solid var(--line);border-radius:.8rem;padding:.75rem 1.2rem;
+         box-shadow:0 12px 32px rgba(0,0,0,.22);font-weight:700;font-size:.86rem;max-width:90vw}
+  .banner{background:var(--accent-soft);color:var(--accent-text);border:1px solid var(--accent);
+          border-radius:var(--radius);padding:.85rem 1.1rem;margin-top:1rem;display:flex;align-items:center;gap:.65rem;font-weight:700;font-size:.88rem}
+  .spin{display:inline-block;width:15px;height:15px;border:2.5px solid currentColor;border-right-color:transparent;
+        border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px;flex:none}
   @keyframes sp{to{transform:rotate(360deg)}}
   .hidden{display:none!important}
   @media (max-width:560px){ .row{align-items:flex-start;flex-wrap:wrap} .row .detail{text-align:left;width:100%} }
@@ -419,13 +463,13 @@ PAGE = r"""<!doctype html>
   <form class="login card" onsubmit="doLogin(event)">
     <div class="logo">M</div>
     <h1>MILO Repair &amp; Configure</h1>
-    <p class="muted" style="margin:.4rem 0 1.2rem">Enter the PIN shown when this machine was installed.</p>
-    <input id="pin" type="password" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit PIN"
-           style="text-align:center;font-size:1.3rem;letter-spacing:.3em" required>
+    <p class="muted" style="margin:.4rem 0 1.2rem">Enter the 6-digit PIN shown when this machine was installed.</p>
+    <input id="pin" type="password" inputmode="numeric" pattern="[0-9]{4,12}" autocomplete="one-time-code" placeholder="••••••"
+           style="text-align:center;font-size:1.35rem;letter-spacing:.3em;font-weight:800" required>
     <p id="loginErr" class="pill fail hidden" style="margin:.8rem 0 0"></p>
-    <button style="width:100%;margin-top:1rem;padding:.8rem">Unlock</button>
-    <p class="muted" style="margin-top:1rem;font-size:.72rem">
-      Forgot it? On the machine run: <code>sudo milo ui</code>
+    <button style="width:100%;margin-top:1rem;padding:.85rem">Unlock Console</button>
+    <p class="muted" style="margin-top:1.1rem;font-size:.73rem">
+      Forgot PIN? Run on the Pi: <code>sudo milo ui</code>
     </p>
   </form>
 </div>
@@ -438,10 +482,16 @@ PAGE = r"""<!doctype html>
     </div>
     <div class="spacer"></div>
     <span id="overallPill" class="pill warn">checking…</span>
+    <button class="ghost" onclick="cycleTheme()" id="themeBtn" title="Switch color scheme">Theme</button>
     <button class="ghost" onclick="logout()">Log out</button>
   </header>
 
   <div class="wrap">
+    <div id="jobBanner" class="banner hidden">
+      <span class="spin"></span>
+      <span id="jobBannerText">Running task…</span>
+    </div>
+
     <div class="card">
       <h2>🩺 Machine health</h2>
       <div id="ident" class="muted" style="margin-bottom:.6rem"></div>
@@ -478,12 +528,12 @@ PAGE = r"""<!doctype html>
     <div class="card">
       <h2>⚙️ Configuration</h2>
       <div class="grid">
-        <div><label for="cid">Machine ID</label><input id="cid" placeholder="school-1"></div>
+        <div><label for="cid">Machine ID</label><input id="cid" placeholder="school-1" required pattern="[A-Za-z0-9_-]{1,32}"></div>
         <div><label for="cname">Display name</label><input id="cname" placeholder="MILO School"></div>
         <div><label for="cenv">Environment (theme)</label>
           <select id="cenv"><option value="">Network default</option><option value="office">Office</option>
           <option value="school">School</option><option value="city">City</option></select></div>
-        <div><label for="chost">Broker host</label><input id="chost" placeholder="127.0.0.1"></div>
+        <div><label for="chost">Broker host</label><input id="chost" placeholder="127.0.0.1" required></div>
         <div><label for="cchan">Update channel</label>
           <select id="cchan"><option value="stable">Stable</option><option value="beta">Beta</option></select></div>
         <div><label for="cauto">Automatic updates</label>
@@ -503,9 +553,9 @@ PAGE = r"""<!doctype html>
       <p class="muted" style="margin-top:.7rem">A reboot is needed after installing the AI HAT+ for the first time.</p>
     </div>
 
-    <p class="muted" style="text-align:center;margin-top:1.5rem;font-size:.75rem">
+    <p class="muted" style="text-align:center;margin-top:1.75rem;font-size:.76rem">
       MILO Recovery Kit · rebuild any machine with<br>
-      <code id="rebuildCmd">curl -fsSL &lt;your-site&gt;/recovery/install.sh | sudo bash</code>
+      <code id="rebuildCmd" style="user-select:all">curl -fsSL &lt;your-site&gt;/recovery/install.sh | sudo bash</code>
     </p>
   </div>
 </div>
@@ -514,6 +564,15 @@ PAGE = r"""<!doctype html>
 
 <script>
 let timer = null, busy = false;
+
+function cycleTheme() {
+  const meta = document.querySelector('meta[name="color-scheme"]');
+  const cur = meta.content;
+  const next = cur === 'light dark' ? 'dark' : cur === 'dark' ? 'light' : 'light dark';
+  meta.content = next;
+  localStorage.setItem('milo_repair_theme', next);
+  toast('Theme: ' + (next === 'light dark' ? 'System' : next), 2000);
+}
 
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const toast = (msg, ms = 3500) => {
@@ -560,7 +619,7 @@ async function refresh() {
 
   document.getElementById('ident').innerHTML =
     `<b>${esc(d.doctor.machine_name || d.config.machine_id || 'MILO')}</b> · ${esc(d.config.machine_id)} · ` +
-    `role ${esc(d.config.role)} · version ${esc(d.doctor.version || '?')}`;
+    `role <b>${esc(d.config.role)}</b> · version <code>${esc(d.doctor.version || '?')}</code>`;
 
   document.getElementById('checks').innerHTML = (d.doctor.checks || []).map(c =>
     `<div class="row"><span class="dot ${esc(c.status)}"></span>` +
@@ -581,7 +640,7 @@ async function refresh() {
        : 'up to date'}</span></div>`;
 
   document.getElementById('backups').innerHTML = (d.backups || []).length
-    ? d.backups.map(b => `<div class="row"><span class="label" style="font-size:.8rem">${esc(b.name)}</span>` +
+    ? d.backups.map(b => `<div class="row"><span class="label" style="font-size:.82rem">${esc(b.name)}</span>` +
         `<span class="detail">${(b.size / 1024).toFixed(0)} KB · ${new Date(b.mtime * 1000).toLocaleString()}</span></div>`).join('')
     : '<p class="muted">No backups yet.</p>';
 
@@ -595,9 +654,13 @@ async function refresh() {
   }
 
   const j = d.job || {};
+  const banner = document.getElementById('jobBanner');
+  banner.classList.toggle('hidden', !j.running);
+  if (j.running) {
+    document.getElementById('jobBannerText').textContent = (j.name || 'Running task') + '…';
+  }
   document.querySelectorAll('.card button').forEach(b => { b.disabled = !!j.running; });
-  if (j.running) toast(j.name + ' …', 4000);
-  else if (j.finished_at && j.finished_at !== window._lastJob) {
+  if (!j.running && j.finished_at && j.finished_at !== window._lastJob) {
     window._lastJob = j.finished_at;
     toast((j.ok ? '✓ ' : '✗ ') + (j.name || 'Task') + (j.ok ? ' finished' : ' failed'), 6000);
     if (j.output) { const lb = document.getElementById('logbox'); lb.textContent = j.output; lb.classList.remove('hidden'); }

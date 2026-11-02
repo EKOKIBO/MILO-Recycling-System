@@ -515,13 +515,18 @@ PY="${VENV_DIR}/bin/python"
 
 PIP_PKGS=(paho-mqtt bcrypt pyserial pywebpush)
 [[ "$ROLE" != "core" ]] && PIP_PKGS+=(opencv-python-headless numpy)
+PIP_WHEEL_ARGS=()
+if [[ -d "${RELEASE_DIR}/wheels" ]] && compgen -G "${RELEASE_DIR}/wheels/*" >/dev/null; then
+  PIP_WHEEL_ARGS=(--no-index --find-links "${RELEASE_DIR}/wheels")
+  info "Using bundled offline wheels from ${RELEASE_DIR}/wheels"
+fi
 info "Installing: ${PIP_PKGS[*]}"
-if "$PY" -m pip install --quiet "${PIP_PKGS[@]}" >>"$LOG_FILE" 2>&1; then
+if "$PY" -m pip install --quiet "${PIP_WHEEL_ARGS[@]}" "${PIP_PKGS[@]}" >>"$LOG_FILE" 2>&1; then
   ok "Python dependencies installed"
 else
   warn "Bulk install failed; retrying one by one"
   for p in "${PIP_PKGS[@]}"; do
-    "$PY" -m pip install --quiet "$p" >>"$LOG_FILE" 2>&1 && info "ok: $p" || warn "MISSING: $p"
+    "$PY" -m pip install --quiet "${PIP_WHEEL_ARGS[@]}" "$p" >>"$LOG_FILE" 2>&1 && info "ok: $p" || warn "MISSING: $p"
   done
 fi
 
@@ -651,8 +656,9 @@ MILO_MODEL_PATH=${MODELS_DIR}/milo.hef
 # --- Broker ---------------------------------------------------------------
 MILO_MQTT_HOST=${MQTT_HOST_CFG}
 MILO_MQTT_PORT=1883
-MILO_MQTT_USER=pi_backend
-MILO_MQTT_PASS=${MQTT_PASS}
+MILO_MQTT_USER=$([[ "$ROLE" == "edge" ]] && echo "edge" || echo "pi_backend")
+MILO_MQTT_PASS=$([[ "$ROLE" == "edge" ]] && echo "${EDGE_PASS}" || echo "${MQTT_PASS}")
+MILO_CORE_MQTT_PASS=${MQTT_PASS}
 MILO_BROWSER_PASS=${BROWSER_PASS}
 MILO_EDGE_PASS=${EDGE_PASS}
 

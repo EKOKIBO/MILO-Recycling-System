@@ -3,8 +3,27 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
     <title>MILO — Smart Recycling</title>
     <meta name="description" content="Smart recycling rewards — recycle, earn points, climb the leaderboard." />
+
+    <!-- Prevent Flash of Unstyled Content (FOUC) for dark mode -->
+    <script>
+      (() => {
+        try {
+          const savedDark = localStorage.getItem('miloDark');
+          const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+          const isDark = savedDark !== null ? savedDark === '1' : prefersDark;
+          const schemeMeta = document.querySelector('meta[name="color-scheme"]');
+          if (schemeMeta) {
+            schemeMeta.content = savedDark !== null ? (isDark ? 'dark' : 'light') : 'light dark';
+          }
+          if (isDark) {
+            document.documentElement.classList.add('dark');
+          }
+        } catch {}
+      })();
+    </script>
 
     <!-- PWA (manifest is injected by vite-plugin-pwa at build time) -->
     <meta name="theme-color" content="#4f46e5" media="(prefers-color-scheme: light)" />
@@ -20,7 +39,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="MILO" />
   </head>
-  <body>
+  <body class="antialiased selection:bg-indigo-600 selection:text-white">
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

@@ -62,7 +62,7 @@ fi
 if [[ $WHEELS -eq 1 ]]; then
   mkdir -p "${PKG}/wheels"
   PY="${MILO_ROOT}/venv/bin/python"; [[ -x "$PY" ]] || PY=python3
-  if "$PY" -m pip download -q -d "${PKG}/wheels" paho-mqtt bcrypt pyserial pywebpush 2>/dev/null; then
+  if "$PY" -m pip download -q -d "${PKG}/wheels" paho-mqtt bcrypt pyserial pywebpush opencv-python-headless numpy 2>/dev/null; then
     echo "  ✓ python wheels ($(du -sh "${PKG}/wheels" | cut -f1))"
   else
     echo "  ! could not download wheels (needs internet once)"
