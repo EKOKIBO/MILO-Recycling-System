@@ -379,7 +379,7 @@ if [[ $DO_HAILO -eq 1 ]]; then
   if [[ -e /dev/hailo0 ]]; then
     ok "Hailo device present: /dev/hailo0"
     if command -v hailortcli >/dev/null 2>&1; then
-      IDENT="$(hailortcli fw-control identify 2>/dev/null || true)"
+      IDENT="$(hailortcli fw-control identify 2>/dev/null | tr -d '\000' || true)"
       if grep -qi 'Hailo-8L' <<<"$IDENT"; then HAILO_ARCH="hailo8l"; ok "Accelerator: Hailo-8L (13 TOPS)"
       elif grep -qi 'Hailo-8'  <<<"$IDENT"; then HAILO_ARCH="hailo8";  ok "Accelerator: Hailo-8 (26 TOPS)"
       else warn "Could not identify the accelerator; defaulting model to hailo8"; fi
@@ -669,7 +669,13 @@ MACHINE_NAME="${MACHINE_NAME_ARG:-${EX_NAME:-MILO ${MACHINE_ID}}}"
 MACHINE_ENV="${MACHINE_ENV_ARG:-${EX_ENV:-}}"
 
 MQTT_PASS="${EX_MQTT_PASS:-$(gen_secret)}"
-BROWSER_PASS="${EX_BROWSER_PASS:-$(gen_secret)}"
+# The public web app (milo-robotics.org) connects as 'browser' with build-time
+# password 'milo_browser_public' (security is enforced via mosquitto_aclfile_2).
+if [[ "${MILO_CUSTOM_BROWSER_PASS:-0}" == "1" && -n "$EX_BROWSER_PASS" ]]; then
+  BROWSER_PASS="$EX_BROWSER_PASS"
+else
+  BROWSER_PASS="milo_browser_public"
+fi
 EDGE_PASS="${EX_EDGE_PASS:-$(gen_secret)}"
 UI_PIN="${EX_UI_PIN:-$(shuf -i 100000-999999 -n 1 2>/dev/null || echo $((RANDOM % 900000 + 100000)))}"
 MQTT_HOST_CFG="${EX_HOST:-127.0.0.1}"
@@ -802,16 +808,16 @@ allow_anonymous false
 password_file ${PWFILE}
 acl_file ${ACLFILE}
 
-listener 1883 127.0.0.1
+listener 1883
 protocol mqtt
 
-listener 9001 127.0.0.1
+listener 9001
 protocol websockets
 
 max_packet_size 1048576
 message_size_limit 1048576
 EOF
-  ok "Broker listens on 127.0.0.1 (1883 MQTT, 9001 websockets)"
+  ok "Broker listens on 1883 (MQTT) and 9001 (WebSockets)"
   info "Browsers reach it through the cloudflared tunnel, as before"
 
   systemctl enable mosquitto >>"$LOG_FILE" 2>&1 || true

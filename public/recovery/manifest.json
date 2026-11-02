@@ -1,9 +1,9 @@
 {
   "kit": "MILO Recovery & Install Kit",
-  "version": "2026-11-02.2",
+  "version": "2026-11-02.3",
   "repo": "EKOKIBO/MILO-Backend",
   "site": "https://milo-robotics.org",
-  "generated_at": "2026-11-02T13:13:46.351Z",
+  "generated_at": "2026-11-02T13:55:23.173Z",
   "install_command": "curl -fsSL https://milo-robotics.org/recovery/install.sh | sudo bash",
   "files": [
     {
@@ -17,15 +17,15 @@
       "file": "install.sh",
       "title": "Installer & repair tool",
       "description": "Rebuilds a machine from scratch, or repairs a broken one.",
-      "bytes": 43662,
-      "sha256": "9619e0640ef9afbd03481085c57c6186769b2c55392c3d8b4fa4c90c953893a8"
+      "bytes": 43922,
+      "sha256": "3911d73360852713a2afe0239d35535ca3c26d47471f70e4fc239f9864d0809b"
     },
     {
       "file": "milo-doctor.sh",
       "title": "Diagnostics",
       "description": "Health check with automatic repair.",
-      "bytes": 17137,
-      "sha256": "65e7366b33b2087e45c7a7ed4a95449edc2c1ba50dca62477cc6b19d20912648"
+      "bytes": 17901,
+      "sha256": "bbaaef44f26e471e3025de7b5c00cdc0b6d47d33699068150751db22451011cc"
     },
     {
       "file": "milo-update.sh",
@@ -52,15 +52,15 @@
       "file": "milo-config-ui.py",
       "title": "Repair UI",
       "description": "The on-device web interface.",
-      "bytes": 70850,
-      "sha256": "7e706e0bc83f90f0140ac897bb6afb07aa5d354b8d08cf924c63993428d00aef"
+      "bytes": 94217,
+      "sha256": "f3e4ddb9c50bd96817ba8ade335c618fb8554172a96887d83da51888755e00b7"
     },
     {
       "file": "milo",
       "title": "milo command",
       "description": "The technician command-line tool.",
-      "bytes": 3012,
-      "sha256": "15dc627c58ca9610a149502cf55a700adac1da5215fbafdd5bdc94fd55dc8b91"
+      "bytes": 7764,
+      "sha256": "fbad3fb5bce900b02dff48765dcf3f469eab73e0564b5e9eee89e273239b14f8"
     },
     {
       "file": "RECOVERY.md",

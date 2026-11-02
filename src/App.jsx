@@ -33,7 +33,7 @@ const MQTT_PASS = import.meta.env?.VITE_MQTT_PASS || 'milo_browser_public';
 // the private half lives ONLY on the Pi as MILO_VAPID_PRIVATE_KEY).
 const VAPID_PUBLIC_KEY = import.meta.env?.VITE_VAPID_PUBLIC_KEY || 'BFEREDv8zD4h3UumMdzp-aV4S7KusQAlb_0ihjhh72A3_y-dYtvaEYuNfHGqRzGbvVdZu2kdFlwwCT1jJVUXZvg';
 const NS = 'milo_v2_system';
-const FRONTEND_BUILD = '2026-11-02.2'; // shown in the admin bar next to the backend build
+const FRONTEND_BUILD = '2026-11-02.3'; // shown in the admin bar next to the backend build
 
 // ==========================================
 // MAIN APP COMPONENT
@@ -137,6 +137,8 @@ export default function App() {
   const [analyticsData, setAnalyticsData] = useState(null);       // admin: per-user waste profiles
   const [binCaps, setBinCaps] = useState({});                     // admin: capacity input drafts
   const [recoveryKit, setRecoveryKit] = useState(null);           // admin: downloadable install/repair kit
+  const [repairUiUrl, setRepairUiUrl] = useState(() => localStorage.getItem('miloRepairUrl') || 'http://192.168.1.17:8088');
+  const [showRepairEmbed, setShowRepairEmbed] = useState(false);
   const [snapshot, setSnapshot] = useState(null);        // { src, ts, detections } | { error }
   const [snapshotPending, setSnapshotPending] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(false);
@@ -528,6 +530,10 @@ export default function App() {
             break;
           case `${NS}/config/list`:
             if (data && data.backend_build) setBackendBuild(data.backend_build);
+            if (data && data.repair_ui_url) {
+              setRepairUiUrl(data.repair_ui_url);
+              localStorage.setItem('miloRepairUrl', data.repair_ui_url);
+            }
             if (data && ['office', 'school', 'city'].includes(data.org_type)) {
               setOrgType(data.org_type);
               localStorage.setItem('miloOrgType', data.org_type);
@@ -1670,6 +1676,11 @@ ${teamRows ? `<h2>${esc(t.teamStandings)}</h2><table><tr><th>#</th><th></th><th>
                     {nodeStatus.label}
                   </p>
                   <p className="text-xs md:text-sm text-slate-400 mt-1">{nodeStatus.sub}</p>
+                  {connectionState !== 'online' && (
+                    <a href={repairUiUrl} target="_blank" rel="noopener noreferrer" className={`mt-3 inline-flex items-center gap-1.5 text-xs font-bold ${th.accentText} hover:underline`}>
+                      <Wrench size={13} aria-hidden="true" /> {lang === 'bg' ? 'Отвори Технически Панел (Ремонт)' : 'Open Technician Repair UI'} →
+                    </a>
+                  )}
                 </div>
               </div>
 
@@ -1936,6 +1947,9 @@ ${teamRows ? `<h2>${esc(t.teamStandings)}</h2><table><tr><th>#</th><th></th><th>
                       <button type="button" onClick={() => { setUserView('upgrade'); setLoginError(''); }} className={`block w-full mt-4 text-sm ${th.accentText} font-semibold hover:underline animate-fade-in`}>{t.upgradeLink}</button>
                     )}
                     <button type="button" onClick={() => { setActiveTab('admin'); setUserView('login'); }} className="block w-full mt-4 text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 font-medium">{t.adminPanelLink}</button>
+                    <a href={repairUiUrl} target="_blank" rel="noopener noreferrer" className="mt-2 inline-flex items-center justify-center gap-1.5 text-xs text-slate-400 hover:text-indigo-500 dark:hover:text-indigo-400 font-medium">
+                      <Wrench size={12} aria-hidden="true" /> {lang === 'bg' ? 'Технически Ремонтен Панел (8088)' : 'Technician Repair & Configure UI (8088)'}
+                    </a>
                   </div>
                 )}
                 {userView === 'upgrade' && (
@@ -2242,6 +2256,30 @@ ${teamRows ? `<h2>${esc(t.teamStandings)}</h2><table><tr><th>#</th><th></th><th>
                     {adminAuthPending ? <><Loader2 size={20} className="animate-spin" /> {t.signingIn}</> : <><ShieldCheck size={20} /> {t.unlockDashboard}</>}
                   </button>
                 </form>
+                <div className="mt-6 pt-5 border-t border-slate-200 dark:border-slate-700 text-left space-y-2">
+                  <p className="text-xs font-bold uppercase text-slate-400 flex items-center gap-1.5">
+                    <Wrench size={13} className={th.accentText} aria-hidden="true" />
+                    {lang === 'bg' ? 'Технически Ремонт & Настройки (работи и офлайн)' : 'Technician Repair & Configure UI (works offline)'}
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      type="url"
+                      value={repairUiUrl}
+                      onChange={e => { setRepairUiUrl(e.target.value); localStorage.setItem('miloRepairUrl', e.target.value); }}
+                      placeholder="http://192.168.1.17:8088"
+                      aria-label="Repair UI URL"
+                      className={`${inputSm} text-xs font-mono flex-1`}
+                    />
+                    <a
+                      href={repairUiUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={`${btnPrimary} px-4 h-12 text-xs flex items-center justify-center gap-1.5 shrink-0`}
+                    >
+                      <Wrench size={14} aria-hidden="true" /> {lang === 'bg' ? 'Отвори' : 'Open'}
+                    </a>
+                  </div>
+                </div>
               </div>
             ) : (
               <div className={`${th.sectionGap} animate-fade-in pb-24 md:pb-0`}>
@@ -2257,6 +2295,7 @@ ${teamRows ? `<h2>${esc(t.teamStandings)}</h2><table><tr><th>#</th><th></th><th>
                     </select>
                   </label>
                   <button type="button" onClick={exportCSV} className="text-xs flex items-center gap-2 bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 py-2 rounded-lg font-semibold transition-colors"><Download size={14} aria-hidden="true" /> <span className="hidden sm:inline">{t.exportData}</span></button>
+                  <a href={repairUiUrl} target="_blank" rel="noopener noreferrer" className="text-xs flex items-center gap-2 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 px-3 py-2 rounded-lg font-semibold transition-colors"><Wrench size={14} aria-hidden="true" /> <span className="hidden sm:inline">{lang === 'bg' ? 'Ремонтен Панел' : 'Repair & Configure UI'}</span></a>
                   <button type="button" onClick={() => { setIsAdminAuthenticated(false); setAdminToken(null); setAdminRole(null); }} aria-label={t.logout} className="text-xs flex items-center gap-2 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 px-3 py-2 rounded-lg font-semibold transition-colors"><LogOut size={14} aria-hidden="true" /></button>
                 </div>
 
@@ -2589,6 +2628,56 @@ ${teamRows ? `<h2>${esc(t.teamStandings)}</h2><table><tr><th>#</th><th></th><th>
                           </div>
                         ))}
                       </div>
+                    </div>
+
+                    {/* Unified Technician Repair & Configure Console (Port 8088) */}
+                    <div className={`${cardCls} ${th.cardPad}`}>
+                      <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                        <div>
+                          <h2 className="text-lg md:text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                            <Wrench className={th.accentText} aria-hidden="true" />
+                            {lang === 'bg' ? 'Технически Панел за Ремонт, Камера и База Данни (8088)' : 'Technician Repair, Camera & Database Console (8088)'}
+                          </h2>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                            {lang === 'bg'
+                              ? 'Директен достъп до живия изглед от камерата с AI предвиждания, таблиците в SQLite базата данни и суровите технически поправки.'
+                              : 'Direct access to the live Camera & AI Predictions view, SQLite Database Tables explorer, and raw technician fixes.'}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <input
+                            type="url"
+                            value={repairUiUrl}
+                            onChange={e => { setRepairUiUrl(e.target.value); localStorage.setItem('miloRepairUrl', e.target.value); }}
+                            aria-label="Repair UI URL"
+                            className={`${inputSm} w-56 text-xs font-mono`}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowRepairEmbed(v => !v)}
+                            className={`bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 ${th.btnShape} font-bold px-4 h-12 text-xs transition-colors`}
+                          >
+                            {showRepairEmbed ? (lang === 'bg' ? 'Скрий вградения панел' : 'Hide Embedded Console') : (lang === 'bg' ? 'Покажи тук' : 'Embed Here')}
+                          </button>
+                          <a
+                            href={repairUiUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className={`${btnPrimary} px-4 h-12 text-xs flex items-center gap-1.5`}
+                          >
+                            <Wrench size={14} aria-hidden="true" /> {lang === 'bg' ? 'Отвори в нов раздел' : 'Open Console'}
+                          </a>
+                        </div>
+                      </div>
+                      {showRepairEmbed && (
+                        <div className="mt-4 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-950">
+                          <iframe
+                            src={repairUiUrl}
+                            title="MILO Repair & Configure Console"
+                            className="w-full h-[720px] border-0"
+                          />
+                        </div>
+                      )}
                     </div>
 
                     {/* Recovery & Install Kit — the scripts that rebuild a machine.

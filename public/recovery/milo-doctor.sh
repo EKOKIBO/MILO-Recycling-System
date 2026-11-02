@@ -80,10 +80,20 @@ heal_mosquitto() {
   mkdir -p /etc/mosquitto/conf.d /var/lib/mosquitto /var/log/mosquitto /run/mosquitto 2>/dev/null || true
   chown -R mosquitto:mosquitto /var/lib/mosquitto /var/log/mosquitto /run/mosquitto 2>/dev/null || true
 
+  # Ensure the public web app ('browser' / 'milo_browser_public') can always connect
+  local bpass="milo_browser_public"
+  if [[ "${MILO_CUSTOM_BROWSER_PASS:-0}" == "1" && -n "${MILO_BROWSER_PASS:-}" ]]; then
+    bpass="${MILO_BROWSER_PASS}"
+  elif [[ -f "$CONFIG_FILE" ]]; then
+    sed -i "s/^MILO_BROWSER_PASS=.*/MILO_BROWSER_PASS=milo_browser_public/" "$CONFIG_FILE" 2>/dev/null || true
+    MILO_BROWSER_PASS="milo_browser_public"
+  fi
+
   if [[ -n "${MILO_CORE_MQTT_PASS:-${MILO_MQTT_PASS:-}}" ]] && command -v mosquitto_passwd >/dev/null 2>&1; then
     rm -f "$pwfile"; touch "$pwfile"; chmod 640 "$pwfile"
     mosquitto_passwd -b "$pwfile" pi_backend "${MILO_CORE_MQTT_PASS:-${MILO_MQTT_PASS}}" >/dev/null 2>&1 || true
-    [[ -n "${MILO_BROWSER_PASS:-}" ]] && mosquitto_passwd -b "$pwfile" browser "${MILO_BROWSER_PASS}" >/dev/null 2>&1 || true
+    mosquitto_passwd -b "$pwfile" browser    "$bpass" >/dev/null 2>&1 || true
+    [[ -n "${MILO_BROWSER_PASS:-}" && "${MILO_BROWSER_PASS}" != "$bpass" ]] && mosquitto_passwd -b "$pwfile" browser_alt "${MILO_BROWSER_PASS}" >/dev/null 2>&1 || true
     [[ -n "${MILO_EDGE_PASS:-}" ]] && mosquitto_passwd -b "$pwfile" edge "${MILO_EDGE_PASS}" >/dev/null 2>&1 || true
     chown root:mosquitto "$pwfile" 2>/dev/null || true
     chmod 640 "$pwfile" 2>/dev/null || true
@@ -124,10 +134,10 @@ allow_anonymous false
 password_file ${pwfile}
 acl_file ${aclfile}
 
-listener 1883 127.0.0.1
+listener 1883
 protocol mqtt
 
-listener 9001 127.0.0.1
+listener 9001
 protocol websockets
 
 max_packet_size 1048576
@@ -223,7 +233,10 @@ mqtt_auth_ok() {
   if command -v mosquitto_pub >/dev/null 2>&1; then
     timeout 5 mosquitto_pub -h "${MILO_MQTT_HOST:-127.0.0.1}" -p "${MILO_MQTT_PORT:-1883}" \
       -u "${MILO_MQTT_USER:-pi_backend}" -P "${MILO_MQTT_PASS}" \
-      -t "milo_v2_system/health/ping" -m "ok" >/dev/null 2>&1
+      -t "milo_v2_system/health/ping" -m "ok" >/dev/null 2>&1 \
+    && timeout 5 mosquitto_pub -h "${MILO_MQTT_HOST:-127.0.0.1}" -p "${MILO_MQTT_PORT:-1883}" \
+      -u "browser" -P "milo_browser_public" \
+      -t "milo_v2_system/config/request" -m "{}" >/dev/null 2>&1
   else
     timeout 6 mosquitto_sub -h "${MILO_MQTT_HOST:-127.0.0.1}" -p "${MILO_MQTT_PORT:-1883}" \
       -u "${MILO_MQTT_USER:-pi_backend}" -P "${MILO_MQTT_PASS}" -t '$SYS/broker/version' -C 1 -W 5 >/dev/null 2>&1
@@ -253,7 +266,7 @@ if [[ "$ROLE" != "core" ]]; then
   section "Hardware"
   if [[ -e /dev/hailo0 ]]; then
     if command -v hailortcli >/dev/null 2>&1; then
-      ID_OUT="$(timeout 10 hailortcli fw-control identify 2>/dev/null || true)"
+      ID_OUT="$(timeout 10 hailortcli fw-control identify 2>/dev/null | tr -d '\000' || true)"
       DEV="$(grep -oiE 'Hailo-8L?' <<<"$ID_OUT" | head -1)"
       check ok hailo "AI accelerator" "${DEV:-present} (/dev/hailo0)"
     else

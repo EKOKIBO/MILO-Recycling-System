@@ -4,37 +4,49 @@ MILO Config & Repair UI
 =======================
 A local web interface served BY THE MACHINE ITSELF, styled with the exact same
 visual language, mascot logo, and Lucide icon set as the MILO Recycling System
-PWA so technicians can diagnose, configure, update, or restore a machine from
+PWA so technicians can diagnose, view live camera predictions, inspect/edit
+database tables, run raw fixes, configure, update, or restore a machine from
 any phone or laptop on the local network:
 
-    http://<pi-ip>:8088     (PIN shown at the end of the install)
+    http://<pi-ip>:8088     (unlock with Technician PIN OR Admin username/password)
 
-Deliberately dependency-free (Python standard library only). If the virtual
-environment, the MQTT broker, or the application are broken, this page still
-loads — that is the entire point of a repair tool.
+Deliberately dependency-free (Python standard library only, with optional
+bcrypt for admin password verification). If the virtual environment, the MQTT
+broker, or the application are broken, this page still loads.
 
 Every action is a fixed, named operation; nothing from the browser is ever
 executed as a shell command.
 """
 
 import glob
+import hashlib
 import json
 import os
 import re
 import secrets
 import shutil
+import sqlite3
 import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+try:
+    import bcrypt
+except ImportError:
+    bcrypt = None
+
 MILO_ROOT = os.environ.get('MILO_ROOT', '/opt/milo')
 CONFIG_FILE = os.path.join(MILO_ROOT, 'data', 'config.env')
 PORT = int(os.environ.get('MILO_UI_PORT', '8088'))
 
+PREVIEW_JPG_PATH = '/dev/shm/milo_preview.jpg' if os.path.isdir('/dev/shm') else '/tmp/milo_preview.jpg'
+PREVIEW_JSON_PATH = '/dev/shm/milo_preview.json' if os.path.isdir('/dev/shm') else '/tmp/milo_preview.json'
+SIM_SERIAL_PATH = '/dev/shm/milo_sim_serial.cmd' if os.path.isdir('/dev/shm') else '/tmp/milo_sim_serial.cmd'
+
 SESSION_TTL = 3600          # idle logout after an hour
-MAX_ATTEMPTS = 5            # failed PINs per window, per client address
+MAX_ATTEMPTS = 5            # failed logins per window, per client address
 ATTEMPT_WINDOW = 300
 
 _sessions = {}              # token -> last-seen timestamp
@@ -48,7 +60,7 @@ def safe_cwd():
 
 
 # --------------------------------------------------------------------------
-# Configuration file helpers
+# Configuration & Database helpers
 # --------------------------------------------------------------------------
 def read_config():
     cfg = {}
@@ -63,6 +75,34 @@ def read_config():
     except OSError:
         pass
     return cfg
+
+
+def db_path():
+    cfg = read_config()
+    return cfg.get('MILO_DB_PATH') or os.path.join(MILO_ROOT, 'data', 'recycling_points.db')
+
+
+def verify_admin_credentials(username, password):
+    """Allow logging into the Repair UI using a MILO Admin account (e.g. admin/milo)."""
+    if not username or not password:
+        return False
+    p = db_path()
+    if not os.path.isfile(p):
+        return username == 'admin' and password == 'milo'
+    try:
+        conn = sqlite3.connect(p, timeout=5.0)
+        cur = conn.cursor()
+        cur.execute('SELECT password_hash FROM admins WHERE username = ?', (username.strip(),))
+        row = cur.fetchone()
+        conn.close()
+        if not row or not row[0]:
+            return False
+        stored = row[0]
+        if stored.startswith('$2') and bcrypt is not None:
+            return bcrypt.checkpw(password.encode('utf-8'), stored.encode('utf-8'))
+        return hashlib.sha256(password.encode('utf-8')).hexdigest() == stored
+    except Exception:
+        return False
 
 
 def write_config(updates):
@@ -98,15 +138,28 @@ def main_unit():
     return 'milo-edge.service' if read_config().get('MILO_ROLE') == 'edge' else 'milo-core.service'
 
 
-def strip_getcwd_noise(text):
-    """Filter out harmless shell-init/job-working-directory getcwd warnings."""
+def strip_noise(text):
+    """Filter out harmless shell-init/getcwd and null-byte warnings."""
     if not text:
         return ''
     cleaned = [
         ln for ln in text.splitlines()
         if 'getcwd: cannot access parent directories' not in ln
+        and 'ignored null byte in input' not in ln
     ]
     return '\n'.join(cleaned)
+
+
+def extract_json_line(text):
+    """Find the last valid JSON object line in command output, ignoring stderr noise."""
+    for ln in reversed((text or '').splitlines()):
+        s = ln.strip()
+        if s.startswith('{') and s.endswith('}'):
+            try:
+                return json.loads(s)
+            except ValueError:
+                continue
+    return None
 
 
 def run(cmd, timeout=600):
@@ -118,7 +171,7 @@ def run(cmd, timeout=600):
             timeout=timeout,
             cwd=safe_cwd(),
         )
-        out = strip_getcwd_noise((p.stdout or '') + (p.stderr or ''))
+        out = strip_noise((p.stdout or '') + (p.stderr or ''))
         return p.returncode, out
     except subprocess.TimeoutExpired:
         return 124, 'Timed out.'
@@ -132,7 +185,10 @@ def tool(name):
     if found:
         return found
     local = os.path.join(os.path.dirname(os.path.abspath(__file__)), name + '.sh')
-    return local if os.path.exists(local) else name
+    if os.path.exists(local):
+        return local
+    local_plain = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+    return local_plain if os.path.exists(local_plain) else name
 
 
 # --------------------------------------------------------------------------
@@ -153,12 +209,39 @@ def start_job(name, cmd, timeout=600):
     return True, 'started'
 
 
+def wake_detector_sim():
+    try:
+        with open(SIM_SERIAL_PATH, 'w', encoding='utf-8') as fh:
+            fh.write('START:1001\n')
+        return True, 'Woke detector for test user 1001'
+    except OSError as e:
+        return False, str(e)
+
+
+def capture_still_fallback():
+    """If the GStreamer pipeline isn't writing frames, grab one via rpicam-still."""
+    for bin_name in ('rpicam-still', 'libcamera-still'):
+        if shutil.which(bin_name):
+            return start_job(
+                'Capturing test camera frame',
+                [bin_name, '-n', '-t', '300', '--width', '640', '--height', '480', '-o', PREVIEW_JPG_PATH],
+                20,
+            )
+    return False, 'rpicam-still not found; start MILO Core service for live GStreamer frames'
+
+
 ACTIONS = {
     'restart_app':    lambda: start_job('Restarting MILO application', ['systemctl', 'restart', main_unit()], 120),
     'stop_app':       lambda: start_job('Stopping MILO application', ['systemctl', 'stop', main_unit()], 60),
     'start_app':      lambda: start_job('Starting MILO application', ['systemctl', 'start', main_unit()], 120),
     'restart_broker': lambda: start_job('Restarting MQTT broker', ['systemctl', 'restart', 'mosquitto'], 60),
     'run_doctor':     lambda: start_job('Running diagnostics & auto-repair', [tool('milo-doctor'), '--heal'], 240),
+    'fix_mqtt':       lambda: start_job('Raw Fix: Rebuilding Mosquitto & Web App credentials', [tool('milo'), 'fix', 'mqtt'], 120),
+    'fix_hailo':      lambda: start_job('Raw Fix: Linking Hailo & hailo_apps into venv', [tool('milo'), 'fix', 'hailo'], 240),
+    'fix_db':         lambda: start_job('Raw Fix: SQLite WAL checkpoint, integrity check & VACUUM', [tool('milo'), 'fix', 'db'], 180),
+    'fix_reinstall':  lambda: start_job('Raw Fix: Full local repair install', [tool('milo'), 'fix', 'reinstall'], 600),
+    'wake_detector':  wake_detector_sim,
+    'capture_still':  capture_still_fallback,
     'update_check':   lambda: start_job('Checking for updates', [tool('milo-update'), '--check'], 120),
     'update_now':     lambda: start_job('Installing latest update', [tool('milo-update'), '--force'], 900),
     'rollback':       lambda: start_job('Rolling back to previous release', [tool('milo-update'), '--rollback'], 300),
@@ -169,18 +252,14 @@ ACTIONS = {
 
 
 def gather_status():
-    code, out = run([tool('milo-doctor'), '--json'], 90)
-    try:
-        doctor = json.loads(out.strip().splitlines()[-1])
-    except (ValueError, IndexError):
+    _, out = run([tool('milo-doctor'), '--json'], 90)
+    doctor = extract_json_line(out)
+    if not doctor:
         doctor = {'overall': 'fail', 'checks': [
             {'id': 'doctor', 'status': 'fail', 'label': 'Diagnostics', 'detail': 'milo-doctor did not respond'}]}
 
-    try:
-        _, uo = run([tool('milo-update'), '--json'], 60)
-        update = json.loads(uo.strip().splitlines()[-1])
-    except (ValueError, IndexError):
-        update = {'status': 'unknown', 'update_available': False}
+    _, uo = run([tool('milo-update'), '--json'], 60)
+    update = extract_json_line(uo) or {'status': 'unknown', 'update_available': False}
 
     cfg = read_config()
     backups = []
@@ -210,11 +289,110 @@ def gather_status():
             'channel': cfg.get('MILO_CHANNEL', 'stable'),
             'auto_update': cfg.get('MILO_UPDATE_ENABLED', '1') == '1',
             'repo': cfg.get('MILO_REPO', 'EKOKIBO/MILO-Backend'),
-            'site': cfg.get('MILO_SITE', ''),
+            'site': cfg.get('MILO_SITE', 'https://milo-robotics.org'),
+            'camera_input': cfg.get('MILO_CAMERA_INPUT', 'rpi'),
             'has_github_token': bool(cfg.get('MILO_GITHUB_TOKEN', '')),
-            'browser_pass': cfg.get('MILO_BROWSER_PASS', ''),
+            'browser_pass': cfg.get('MILO_BROWSER_PASS', 'milo_browser_public'),
+            'ui_pin': cfg.get('MILO_UI_PIN', ''),
         },
         'now': int(time.time()),
+    }
+
+
+def list_db_tables():
+    p = db_path()
+    if not os.path.isfile(p):
+        return {'exists': False, 'path': p, 'tables': []}
+    try:
+        conn = sqlite3.connect(p, timeout=5.0)
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+        names = [r[0] for r in cur.fetchall()]
+        tables = []
+        for t in names:
+            safe_t = re.sub(r'[^A-Za-z0-9_]', '', t)
+            cur.execute(f'SELECT COUNT(*) FROM "{safe_t}"')
+            cnt = cur.fetchone()[0]
+            cur.execute(f'PRAGMA table_info("{safe_t}")')
+            cols = [c[1] for c in cur.fetchall()]
+            tables.append({'name': safe_t, 'count': cnt, 'columns': cols})
+        conn.close()
+        return {'exists': True, 'path': p, 'size': os.path.getsize(p), 'tables': tables}
+    except Exception as e:
+        return {'exists': True, 'path': p, 'error': str(e), 'tables': []}
+
+
+def read_db_table(table_name, limit=200):
+    safe_t = re.sub(r'[^A-Za-z0-9_]', '', table_name or '')
+    if not safe_t:
+        return {'error': 'Invalid table name'}
+    p = db_path()
+    if not os.path.isfile(p):
+        return {'error': 'Database file not found'}
+    try:
+        conn = sqlite3.connect(p, timeout=5.0)
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (safe_t,))
+        if not cur.fetchone():
+            conn.close()
+            return {'error': f'Table {safe_t} does not exist'}
+        cur.execute(f'PRAGMA table_info("{safe_t}")')
+        cols = [c[1] for c in cur.fetchall()]
+        pk_cols = [c[1] for c in cur.fetchall() if c[5]]
+        cur.execute(f'SELECT rowid AS _rowid_, * FROM "{safe_t}" ORDER BY rowid DESC LIMIT ?', (min(int(limit), 500),))
+        rows = [[ '' if v is None else str(v) for v in r ] for r in cur.fetchall()]
+        conn.close()
+        return {'table': safe_t, 'columns': ['_rowid_'] + cols, 'rows': rows, 'pk': pk_cols}
+    except Exception as e:
+        return {'error': str(e)}
+
+
+def execute_db_sql(sql_text, backup_first=True):
+    sql_text = (sql_text or '').strip()
+    if not sql_text:
+        return {'ok': False, 'error': 'SQL query is empty'}
+    p = db_path()
+    if not os.path.isfile(p):
+        return {'ok': False, 'error': 'Database file not found'}
+    is_write = not bool(re.match(r'^\s*(SELECT|PRAGMA\s+table_info|PRAGMA\s+quick_check|PRAGMA\s+integrity_check|EXPLAIN)\b', sql_text, re.I))
+    if is_write and backup_first:
+        run([tool('milo-backup'), '--tag', 'pre-sql'], 30)
+    try:
+        conn = sqlite3.connect(p, timeout=10.0)
+        cur = conn.cursor()
+        cur.execute(sql_text)
+        if cur.description:
+            cols = [d[0] for d in cur.description]
+            rows = [['' if v is None else str(v) for v in r] for r in cur.fetchall()[:500]]
+            conn.commit()
+            conn.close()
+            return {'ok': True, 'columns': cols, 'rows': rows, 'rowcount': len(rows)}
+        else:
+            affected = cur.rowcount
+            conn.commit()
+            conn.close()
+            return {'ok': True, 'columns': ['Result'], 'rows': [[f'Query executed successfully ({affected} rows affected)']], 'rowcount': affected}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+
+
+def read_camera_state():
+    has_frame = os.path.isfile(PREVIEW_JPG_PATH)
+    frame_age = round(time.time() - os.path.getmtime(PREVIEW_JPG_PATH), 1) if has_frame else None
+    meta = {'ts': 0, 'awake': False, 'user_code': '', 'detections': []}
+    if os.path.isfile(PREVIEW_JSON_PATH):
+        try:
+            with open(PREVIEW_JSON_PATH, 'r', encoding='utf-8') as fh:
+                meta = json.load(fh)
+        except Exception:
+            pass
+    return {
+        'has_frame': has_frame,
+        'frame_age_sec': frame_age,
+        'awake': meta.get('awake', False),
+        'user_code': meta.get('user_code', ''),
+        'detections': meta.get('detections', []),
+        'ts': meta.get('ts', 0),
     }
 
 
@@ -275,7 +453,7 @@ FALLBACK_MASCOT_SVG = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 6
 class Handler(BaseHTTPRequestHandler):
     server_version = 'MILO-ConfigUI'
 
-    def log_message(self, fmt, *args):        # keep the journal readable
+    def log_message(self, fmt, *args):
         pass
 
     def _send(self, code, body, ctype='application/json', extra=None):
@@ -325,6 +503,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
+        qs = parse_qs(parsed.query)
         if path in ('/', '/index.html'):
             return self._send(200, PAGE, 'text/html; charset=utf-8')
         if path in ('/milo_mascot.png', '/favicon.ico'):
@@ -333,13 +512,29 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, png, 'image/png', {'Cache-Control': 'public, max-age=3600'})
             return self._send(200, FALLBACK_MASCOT_SVG, 'image/svg+xml')
         if path == '/api/session':
-            return self._send(200, {'authed': self._authed()})
+            cfg = read_config()
+            return self._send(200, {'authed': self._authed(), 'site': cfg.get('MILO_SITE', 'https://milo-robotics.org')})
         if not self._authed():
             return self._send(401, {'error': 'auth'})
         if path == '/api/status':
             return self._send(200, gather_status())
+        if path == '/api/camera/state':
+            return self._send(200, read_camera_state())
+        if path == '/api/camera/frame.jpg':
+            if os.path.isfile(PREVIEW_JPG_PATH):
+                try:
+                    with open(PREVIEW_JPG_PATH, 'rb') as fh:
+                        return self._send(200, fh.read(), 'image/jpeg')
+                except OSError:
+                    pass
+            return self._send(404, b'', 'text/plain')
+        if path == '/api/db/tables':
+            return self._send(200, list_db_tables())
+        if path == '/api/db/table':
+            tname = (qs.get('name') or ['users'])[0]
+            limit = (qs.get('limit') or ['200'])[0]
+            return self._send(200, read_db_table(tname, limit))
         if path == '/api/logs':
-            qs = parse_qs(parsed.query)
             source = (qs.get('source') or ['core'])[0]
             return self._send(200, read_log_source(source), 'text/plain; charset=utf-8')
         return self._send(404, {'error': 'not found'})
@@ -356,18 +551,24 @@ class Handler(BaseHTTPRequestHandler):
                 _attempts[ip] = tries
                 if len(tries) >= MAX_ATTEMPTS:
                     return self._send(429, {'error': 'Too many attempts. Wait five minutes.'})
-            real = read_config().get('MILO_UI_PIN', '')
-            given = str(body.get('pin', '')).strip()
-            if real and secrets.compare_digest(given, real):
+            real_pin = read_config().get('MILO_UI_PIN', '')
+            given_pin = str(body.get('pin', '')).strip()
+            username = str(body.get('username', '')).strip()
+            password = str(body.get('password', ''))
+
+            pin_ok = bool(real_pin and given_pin and secrets.compare_digest(given_pin, real_pin))
+            admin_ok = bool(username and password and verify_admin_credentials(username, password))
+
+            if pin_ok or admin_ok:
                 tok = secrets.token_urlsafe(24)
                 with _lock:
                     _sessions[tok] = time.time()
                     _attempts.pop(ip, None)
                 return self._send(200, {'ok': True}, extra={
-                    'Set-Cookie': f'milo_sid={tok}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_TTL}'})
+                    'Set-Cookie': f'milo_sid={tok}; Path=/; HttpOnly; SameSite=Lax; Max-Age={SESSION_TTL}'})
             with _lock:
                 _attempts.setdefault(ip, []).append(now)
-            return self._send(403, {'error': 'Incorrect PIN'})
+            return self._send(403, {'error': 'Invalid Technician PIN or Admin credentials'})
 
         if not self._authed():
             return self._send(401, {'error': 'auth'})
@@ -379,6 +580,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {'error': 'Unknown action'})
             okay, msg = fn()
             return self._send(200 if okay else 409, {'ok': okay, 'message': msg})
+
+        if path == '/api/db/query':
+            sql_text = str(body.get('sql', ''))
+            backup_first = bool(body.get('backup_first', True))
+            res = execute_db_sql(sql_text, backup_first=backup_first)
+            return self._send(200 if res.get('ok') else 400, res)
+
+        if path == '/api/db/delete_row':
+            tname = re.sub(r'[^A-Za-z0-9_]', '', str(body.get('table', '')))
+            rowid = int(body.get('rowid', -1))
+            if not tname or rowid < 0:
+                return self._send(400, {'ok': False, 'error': 'Invalid table or rowid'})
+            res = execute_db_sql(f'DELETE FROM "{tname}" WHERE rowid = {rowid};', backup_first=False)
+            return self._send(200 if res.get('ok') else 400, res)
 
         if path == '/api/config':
             updates = {}
@@ -398,6 +613,9 @@ class Handler(BaseHTTPRequestHandler):
                 updates['MILO_CHANNEL'] = ch
             if 'auto_update' in body:
                 updates['MILO_UPDATE_ENABLED'] = '1' if body['auto_update'] else '0'
+            cam_in = str(body.get('camera_input', '')).strip()
+            if cam_in in ('rpi', 'usb', '/dev/video0', 'default'):
+                updates['MILO_CAMERA_INPUT'] = cam_in
             repo = str(body.get('repo', '')).strip()
             if repo and re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo):
                 updates['MILO_REPO'] = repo
@@ -424,8 +642,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 # --------------------------------------------------------------------------
-# Web Interface — matches the MILO Recycling System PWA (mascot logo, Lucide
-# SVG icons, slate/indigo design tokens, segmented tabs, native <dialog>).
+# Web Interface — matches the MILO Recycling System PWA
 # --------------------------------------------------------------------------
 PAGE = r"""<!doctype html>
 <html lang="en">
@@ -573,7 +790,6 @@ svg.lucide {
   flex-shrink: 0;
 }
 
-/* Header (matches MILO PWA header) */
 .site-header {
   position: sticky;
   top: 0;
@@ -583,7 +799,7 @@ svg.lucide {
   border-bottom: 1px solid var(--border);
 }
 .header-inner {
-  max-width: 1120px;
+  max-width: 1180px;
   margin: 0 auto;
   padding: 0 16px;
   height: 72px;
@@ -635,7 +851,7 @@ svg.lucide {
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 .machine-pill {
   display: inline-flex;
@@ -648,7 +864,7 @@ svg.lucide {
   font-size: 12px;
   font-weight: 700;
 }
-@media (max-width: 640px) {
+@media (max-width: 720px) {
   .machine-pill { display: none; }
 }
 .icon-btn {
@@ -664,20 +880,19 @@ svg.lucide {
   font-size: 13px;
   font-weight: 700;
   cursor: pointer;
+  text-decoration: none;
   transition: background 0.15s, border-color 0.15s;
 }
 .icon-btn:hover {
   border-color: var(--accent);
 }
 
-/* Main container */
 .container {
-  max-width: 1120px;
+  max-width: 1180px;
   margin: 0 auto;
   padding: 24px 16px 64px;
 }
 
-/* Cards */
 .card {
   background: var(--card);
   border: 1px solid var(--border);
@@ -712,7 +927,6 @@ svg.lucide {
   justify-content: center;
 }
 
-/* Status Banner + KPI Grid */
 .hero-banner {
   display: flex;
   align-items: center;
@@ -796,7 +1010,6 @@ svg.lucide {
   margin-top: 2px;
 }
 
-/* Segmented Tabs (matches PWA Admin tabs) */
 .tabs-bar {
   display: flex;
   gap: 6px;
@@ -814,7 +1027,7 @@ svg.lucide {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 10px 16px;
+  padding: 10px 14px;
   border-radius: 10px;
   border: none;
   background: transparent;
@@ -824,9 +1037,7 @@ svg.lucide {
   cursor: pointer;
   transition: all 0.15s;
 }
-.tab-btn:hover {
-  color: var(--fg);
-}
+.tab-btn:hover { color: var(--fg); }
 .tab-btn.active {
   background: var(--accent);
   color: #ffffff;
@@ -843,12 +1054,7 @@ svg.lucide {
   background: var(--err-soft);
   color: var(--err-text);
 }
-.tab-btn:not(.active) .tab-badge.ok {
-  background: var(--ok-soft);
-  color: var(--ok-text);
-}
 
-/* Buttons */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -865,15 +1071,13 @@ svg.lucide {
   cursor: pointer;
   transition: all 0.15s;
   white-space: nowrap;
+  text-decoration: none;
 }
 .btn:hover:not(:disabled) {
   border-color: var(--accent);
   transform: translateY(-1px);
 }
-.btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-primary {
   background: var(--accent);
   color: #ffffff;
@@ -882,11 +1086,6 @@ svg.lucide {
 }
 .btn-primary:hover:not(:disabled) {
   background: var(--accent-hover);
-  border-color: transparent;
-}
-.btn-success {
-  background: var(--ok);
-  color: #ffffff;
   border-color: transparent;
 }
 .btn-danger {
@@ -904,7 +1103,6 @@ svg.lucide {
   gap: 8px;
 }
 
-/* Pills */
 .pill {
   display: inline-flex;
   align-items: center;
@@ -918,7 +1116,6 @@ svg.lucide {
 .pill.warn { background: var(--warn-soft); color: var(--warn-text); }
 .pill.fail { background: var(--err-soft);  color: var(--err-text); }
 
-/* Health Check Rows */
 .checks-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -937,19 +1134,9 @@ svg.lucide {
   background: var(--card-alt);
   border: 1px solid var(--border);
 }
-.check-item.fail {
-  border-color: var(--err);
-  background: var(--err-soft);
-}
-.check-item.warn {
-  border-color: var(--warn);
-}
-.check-left {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
+.check-item.fail { border-color: var(--err); background: var(--err-soft); }
+.check-item.warn { border-color: var(--warn); }
+.check-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .check-dot {
   width: 26px;
   height: 26px;
@@ -962,22 +1149,10 @@ svg.lucide {
 .check-dot.ok   { background: var(--ok-soft);   color: var(--ok-text); }
 .check-dot.warn { background: var(--warn-soft); color: var(--warn-text); }
 .check-dot.fail { background: var(--err-soft);  color: var(--err-text); }
-.check-label {
-  font-size: 13px;
-  font-weight: 700;
-}
-.check-detail {
-  font-size: 12px;
-  color: var(--muted);
-  text-align: right;
-  word-break: break-word;
-}
-.check-item.fail .check-detail {
-  color: var(--err-text);
-  font-weight: 600;
-}
+.check-label { font-size: 13px; font-weight: 700; }
+.check-detail { font-size: 12px; color: var(--muted); text-align: right; word-break: break-word; }
+.check-item.fail .check-detail { color: var(--err-text); font-weight: 600; }
 
-/* Two-column layout */
 .two-col {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -987,7 +1162,6 @@ svg.lucide {
   .two-col { grid-template-columns: 1fr; }
 }
 
-/* Forms */
 .form-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1005,14 +1179,11 @@ svg.lucide {
   color: var(--muted);
   margin-bottom: 6px;
 }
-.field-hint {
-  font-size: 11px;
-  color: var(--muted);
-  margin-top: 4px;
-}
+.field-hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
 input[type="text"],
 input[type="password"],
 input[type="search"],
+textarea,
 select {
   width: 100%;
   padding: 10px 12px;
@@ -1025,16 +1196,13 @@ select {
   outline: none;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
-input:focus, select:focus {
+input:focus, select:focus, textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
-.input-group {
-  display: flex;
-  gap: 8px;
-}
+.input-group { display: flex; gap: 8px; }
 
-/* Terminal / Log Viewer (always dark scheme per component-specific-light-dark-theme) */
+/* Terminal / Log Viewer (component-specific-light-dark-theme) */
 pre.log-viewer {
   color-scheme: only dark;
   background: #0b1120;
@@ -1053,13 +1221,96 @@ pre.log-viewer {
   margin: 0;
 }
 
-/* Backups table list */
-.backup-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 14px;
+/* Responsive Data Table (follows modern-web-guidance `responsive-table`) */
+.table-wrapper {
+  overflow: auto;
+  max-inline-size: 100%;
+  max-block-size: min(480px, 75vh);
+  container-type: inline-size;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
 }
+.table-wrapper table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+}
+.table-wrapper caption {
+  text-align: left;
+  padding: 10px 14px;
+  font-weight: 800;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  background: var(--card-alt);
+  border-bottom: 1px solid var(--border);
+}
+.table-wrapper thead {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 2;
+}
+.table-wrapper th,
+.table-wrapper td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.table-wrapper thead th {
+  background: var(--card-alt);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.table-wrapper tbody th {
+  position: sticky;
+  inset-inline-start: 0;
+  z-index: 1;
+  background: var(--card);
+  font-family: ui-monospace, monospace;
+  font-weight: 700;
+}
+@container (width < 560px) {
+  .table-wrapper table,
+  .table-wrapper thead,
+  .table-wrapper tbody,
+  .table-wrapper tr,
+  .table-wrapper th,
+  .table-wrapper td {
+    display: block;
+    white-space: normal;
+    max-width: none;
+  }
+  .table-wrapper thead {
+    display: none;
+  }
+  .table-wrapper tr {
+    margin-block-end: 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+  .table-wrapper tbody th {
+    position: sticky;
+    inset-block-start: 0;
+    background: var(--card-alt);
+  }
+  .table-wrapper td::before {
+    content: attr(data-label) ": ";
+    font-weight: 800;
+    color: var(--muted);
+  }
+}
+
+.backup-list { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
 .backup-row {
   display: flex;
   align-items: center;
@@ -1077,6 +1328,25 @@ pre.log-viewer {
   word-break: break-all;
 }
 
+/* Camera Preview Frame */
+.cam-stage {
+  background: #0b1120;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  min-height: 320px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+}
+.cam-stage img {
+  width: 100%;
+  max-height: 480px;
+  object-fit: contain;
+  display: block;
+}
+
 /* Login Screen */
 .login-wrap {
   min-height: calc(100vh - 80px);
@@ -1086,7 +1356,7 @@ pre.log-viewer {
   padding: 24px 16px;
 }
 .login-card {
-  max-width: 400px;
+  max-width: 420px;
   width: 100%;
   text-align: center;
   padding: 32px 28px;
@@ -1104,11 +1374,7 @@ pre.log-viewer {
   align-items: center;
   justify-content: center;
 }
-.login-mascot img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
+.login-mascot img { width: 100%; height: 100%; object-fit: contain; }
 .pin-input {
   text-align: center;
   font-size: 24px !important;
@@ -1117,7 +1383,7 @@ pre.log-viewer {
   padding: 12px !important;
 }
 
-/* Native Modal Dialog (follows modern-web-guidance `dialog`) */
+/* Native Modal Dialog (`dialog`) */
 dialog:modal {
   overscroll-behavior: contain;
   border: 1px solid var(--border);
@@ -1146,12 +1412,8 @@ dialog::backdrop {
   justify-content: center;
   margin: 0 auto 14px;
 }
-.dialog-icon.danger {
-  background: var(--err-soft);
-  color: var(--err-text);
-}
+.dialog-icon.danger { background: var(--err-soft); color: var(--err-text); }
 
-/* Toast notification */
 .toast {
   position: fixed;
   bottom: 20px;
@@ -1181,7 +1443,6 @@ dialog::backdrop {
 </head>
 <body>
 
-<!-- Top Navigation Header (Identical visual identity to the MILO PWA) -->
 <header class="site-header">
   <div class="header-inner">
     <div class="brand">
@@ -1200,6 +1461,11 @@ dialog::backdrop {
         <span id="hdr-machine-text"></span>
       </span>
 
+      <a id="hdr-pwa-link" href="https://milo-robotics.org" target="_blank" rel="noopener" class="icon-btn" title="Open MILO Web App">
+        <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+        <span>MILO Web App</span>
+      </a>
+
       <button type="button" class="icon-btn" id="theme-btn" onclick="toggleTheme()" aria-label="Toggle color theme">
         <svg id="icon-sun" class="lucide hidden" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
         <svg id="icon-moon" class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
@@ -1213,19 +1479,32 @@ dialog::backdrop {
   </div>
 </header>
 
-<!-- PIN Login View -->
+<!-- Unified Login View (Technician PIN OR Admin Username/Password) -->
 <div id="login-view" class="login-wrap hidden">
   <div class="card login-card">
     <div class="login-mascot">
       <img src="/milo_mascot.png" alt="" aria-hidden="true" draggable="false">
     </div>
-    <h2 style="margin:0 0 6px;font-size:22px;font-weight:900">Technician Access</h2>
-    <p style="margin:0 0 20px;font-size:13px;color:var(--muted)">
-      Enter the 6-digit PIN from your install summary or <code style="font-size:12px">/opt/milo/data/config.env</code>.
+    <h2 style="margin:0 0 6px;font-size:22px;font-weight:900">Technician &amp; Admin Access</h2>
+    <p style="margin:0 0 16px;font-size:13px;color:var(--muted)">
+      Sign in with your MILO Admin account (e.g. <code>admin</code>) or the 6-digit Technician PIN.
     </p>
+
+    <div class="tabs-bar" style="margin-bottom:16px">
+      <button type="button" class="tab-btn active" id="lmode-admin" onclick="setLoginMode('admin')">Admin Account</button>
+      <button type="button" class="tab-btn" id="lmode-pin" onclick="setLoginMode('pin')">6-Digit PIN</button>
+    </div>
+
     <form onsubmit="login(event)">
-      <input id="pin" class="pin-input" type="password" inputmode="numeric" autocomplete="one-time-code"
-             placeholder="••••••" maxlength="16" required autofocus>
+      <div id="login-admin-fields" style="display:flex;flex-direction:column;gap:10px">
+        <input id="login-user" type="text" placeholder="Admin username (e.g. admin)" value="admin" autocomplete="username">
+        <input id="login-pass" type="password" placeholder="Admin password" autocomplete="current-password">
+      </div>
+      <div id="login-pin-fields" class="hidden">
+        <input id="pin" class="pin-input" type="password" inputmode="numeric" autocomplete="one-time-code"
+               placeholder="••••••" maxlength="16">
+      </div>
+
       <div id="login-err" style="color:var(--err-text);font-size:13px;font-weight:700;min-height:20px;margin:10px 0"></div>
       <button class="btn btn-primary" style="width:100%;padding:12px;font-size:14px" type="submit">
         <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
@@ -1252,7 +1531,7 @@ dialog::backdrop {
     <div class="btn-row">
       <button type="button" class="btn btn-primary" onclick="act('run_doctor')">
         <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
-        Auto-Repair Issues
+        Auto-Repair All Issues
       </button>
       <button type="button" class="btn" onclick="refresh()">
         <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
@@ -1273,7 +1552,7 @@ dialog::backdrop {
     <pre id="job-out" class="log-viewer" style="max-height:220px"></pre>
   </div>
 
-  <!-- 4 At-a-Glance Summary KPI Cards -->
+  <!-- 4 Summary KPI Cards -->
   <div class="kpi-grid">
     <div class="kpi-card">
       <div>
@@ -1317,12 +1596,20 @@ dialog::backdrop {
     </div>
   </div>
 
-  <!-- Segmented Navigation Tabs -->
+  <!-- 6 Segmented Navigation Tabs -->
   <nav class="tabs-bar" aria-label="Console sections">
     <button type="button" class="tab-btn active" data-tab="health" onclick="switchTab('health')">
       <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></svg>
-      <span>Health &amp; Controls</span>
+      <span>Health &amp; Raw Fixes</span>
       <span id="tab-health-badge" class="tab-badge hidden"></span>
+    </button>
+    <button type="button" class="tab-btn" data-tab="camera" onclick="switchTab('camera')">
+      <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
+      <span>Camera &amp; AI Preview</span>
+    </button>
+    <button type="button" class="tab-btn" data-tab="database" onclick="switchTab('database')">
+      <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg>
+      <span>Database Tables</span>
     </button>
     <button type="button" class="tab-btn" data-tab="updates" onclick="switchTab('updates')">
       <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
@@ -1339,7 +1626,7 @@ dialog::backdrop {
     </button>
   </nav>
 
-  <!-- TAB 1: HEALTH & CONTROLS -->
+  <!-- TAB 1: HEALTH & RAW FIXES -->
   <section id="tab-health">
     <div class="card" style="margin-bottom:16px">
       <div class="card-header">
@@ -1354,44 +1641,181 @@ dialog::backdrop {
       <div id="checks-grid" class="checks-grid"></div>
     </div>
 
-    <div class="card">
-      <div class="card-header">
-        <h3 class="card-title">
-          <span class="card-icon">
-            <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" x2="12" y1="2" y2="12"/></svg>
-          </span>
-          Service &amp; Hardware Controls
-        </h3>
+    <div class="two-col">
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">
+            <span class="card-icon">
+              <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+            </span>
+            Targeted Raw Technician Fixes
+          </h3>
+        </div>
+        <p style="margin:0 0 14px;font-size:13px;color:var(--muted)">
+          Execute individual low-level system repairs or run them directly via SSH without the UI using <code>sudo milo fix</code>.
+        </p>
+        <div class="btn-row" style="margin-bottom:16px">
+          <button type="button" class="btn btn-primary" onclick="act('fix_mqtt')">
+            Fix MQTT &amp; Web App Link
+          </button>
+          <button type="button" class="btn" onclick="act('fix_hailo')">
+            Fix Hailo &amp; Vision Links
+          </button>
+          <button type="button" class="btn" onclick="act('fix_db')">
+            Repair &amp; Vacuum Database
+          </button>
+          <button type="button" class="btn" onclick="askConfirm('fix_reinstall', 'Run Full Local Repair Install?', 'This re-runs install.sh --repair using the local release files in /opt/milo/current.', false)">
+            Full Local Re-Install
+          </button>
+        </div>
+        <pre class="log-viewer" style="font-size:11px;padding:10px 12px"># Headless / SSH Raw Fix Commands (without Web UI):
+sudo milo fix all        # Repair MQTT, Hailo, permissions &amp; restart
+sudo milo fix mqtt       # Rewrite Mosquitto config &amp; browser password
+sudo milo fix hailo      # Link hailo_apps into /opt/milo/venv
+sudo milo fix db         # Checkpoint WAL, integrity check &amp; vacuum DB
+milo db                  # View all database tables &amp; rows in terminal
+sudo milo camera         # Run interactive camera preview on Pi desktop</pre>
       </div>
-      <div class="btn-row">
-        <button type="button" class="btn btn-primary" onclick="act('restart_app')">
-          <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
-          Restart MILO Service
-        </button>
-        <button type="button" class="btn" onclick="act('restart_broker')">
-          <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h.01"/><path d="M2 8.82a15 15 0 0 1 20 0"/><path d="M5 12.859a10 10 0 0 1 14 0"/><path d="M8.5 16.429a5 5 0 0 1 7 0"/></svg>
-          Restart MQTT Broker
-        </button>
-        <button type="button" class="btn" onclick="act('start_app')">
-          <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg>
-          Start App
-        </button>
-        <button type="button" class="btn" onclick="act('stop_app')">
-          <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="5" y="5" rx="2"/></svg>
-          Stop App
-        </button>
-        <button type="button" class="btn btn-danger" onclick="askConfirm('reboot', 'Reboot Raspberry Pi?', 'The machine will go offline for ~45 seconds while it restarts.', true)">
-          <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" x2="12" y1="2" y2="12"/></svg>
-          Reboot Machine
-        </button>
+
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">
+            <span class="card-icon">
+              <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" x2="12" y1="2" y2="12"/></svg>
+            </span>
+            Service &amp; Hardware Controls
+          </h3>
+        </div>
+        <p style="margin:0 0 14px;font-size:13px;color:var(--muted)">
+          Manage the systemd services for the MILO application, local MQTT broker, and Raspberry Pi power state.
+        </p>
+        <div class="btn-row">
+          <button type="button" class="btn btn-primary" onclick="act('restart_app')">
+            <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+            Restart MILO Service
+          </button>
+          <button type="button" class="btn" onclick="act('restart_broker')">
+            Restart MQTT Broker
+          </button>
+          <button type="button" class="btn" onclick="act('start_app')">
+            Start App
+          </button>
+          <button type="button" class="btn" onclick="act('stop_app')">
+            Stop App
+          </button>
+          <button type="button" class="btn btn-danger" onclick="askConfirm('reboot', 'Reboot Raspberry Pi?', 'The machine will go offline for ~45 seconds while it restarts.', true)">
+            Reboot Machine
+          </button>
+        </div>
       </div>
     </div>
   </section>
 
-  <!-- TAB 2: UPDATES & BACKUPS -->
+  <!-- TAB 2: CAMERA & AI PREVIEW -->
+  <section id="tab-camera" class="hidden">
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">
+          <span class="card-icon">
+            <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
+          </span>
+          Live Camera View &amp; AI Predictions
+        </h3>
+        <div class="btn-row">
+          <span id="cam-wake-pill" class="pill warn">Idle (Waiting for RFID)</span>
+          <button type="button" class="btn btn-primary" onclick="act('wake_detector')">
+            Simulate RFID Scan (Wake Detector)
+          </button>
+          <button type="button" class="btn" onclick="act('capture_still')">
+            Capture Test Still
+          </button>
+        </div>
+      </div>
+
+      <div class="two-col">
+        <div class="cam-stage">
+          <img id="cam-img" class="hidden" alt="Live camera preview with AI bounding boxes">
+          <div id="cam-empty" style="padding:28px;text-align:center;color:#94a3b8;font-size:13px">
+            No live camera frame captured yet.<br>
+            Ensure the Raspberry Pi camera ribbon is seated and click <strong>Capture Test Still</strong> or <strong>Restart MILO Service</strong>.
+          </div>
+        </div>
+
+        <div>
+          <h4 style="margin:0 0 10px;font-size:14px;font-weight:800">Real-Time Detections</h4>
+          <div id="cam-dets" style="display:flex;flex-direction:column;gap:8px;margin-bottom:18px">
+            <div class="backup-row"><span style="color:var(--muted)">Waiting for detections…</span></div>
+          </div>
+
+          <h4 style="margin:0 0 8px;font-size:14px;font-weight:800">Desktop HDMI Window</h4>
+          <p style="margin:0;font-size:13px;color:var(--muted)">
+            <code>milo-detect.py</code> automatically attaches to your Raspberry Pi desktop display (<code>DISPLAY=:0</code> / <code>wayland-0</code>) and passes <code>--input rpi</code> so the native GStreamer preview window opens directly on the Pi monitor. You can also run <code>sudo milo camera</code> in a terminal on the Pi.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TAB 3: DATABASE EXPLORER & RAW SQL -->
+  <section id="tab-database" class="hidden">
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header">
+        <h3 class="card-title">
+          <span class="card-icon">
+            <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg>
+          </span>
+          Database Table Explorer
+        </h3>
+        <div class="btn-row">
+          <input id="db-search" type="search" placeholder="Filter rows…" oninput="filterDbRows()" style="width:200px;padding:7px 12px">
+          <button type="button" class="btn" onclick="loadDbTables()">Refresh Tables</button>
+        </div>
+      </div>
+
+      <div id="db-table-pills" class="btn-row" style="margin-bottom:14px"></div>
+
+      <div tabindex="0" role="region" aria-labelledby="db-table-caption" class="table-wrapper">
+        <table>
+          <caption id="db-table-caption">Select a table above</caption>
+          <thead id="db-thead"></thead>
+          <tbody id="db-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">
+          <span class="card-icon">
+            <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>
+          </span>
+          Raw SQL Query &amp; Fix Console
+        </h3>
+        <div class="btn-row">
+          <button type="button" class="btn" onclick="setSqlPreset('SELECT code, name, department, status, account_type FROM users;')">Users</button>
+          <button type="button" class="btn" onclick="setSqlPreset('SELECT id, user_code, material, points, machine_id, datetime(CAST(timestamp AS INTEGER), \'unixepoch\', \'localtime\') AS time FROM user_points ORDER BY id DESC LIMIT 50;')">Recent Deposits</button>
+          <button type="button" class="btn" onclick="setSqlPreset('SELECT * FROM bins;')">Bins</button>
+          <button type="button" class="btn" onclick="setSqlPreset('UPDATE bins SET count = 0, alerted = 0;')">Empty All Bins</button>
+          <button type="button" class="btn" onclick="setSqlPreset('PRAGMA integrity_check;')">Integrity Check</button>
+        </div>
+      </div>
+      <form onsubmit="runSqlQuery(event)">
+        <textarea id="sql-input" rows="3" style="font-family:ui-monospace,monospace;font-size:13px;margin-bottom:10px" placeholder="SELECT * FROM users LIMIT 50;"></textarea>
+        <div class="btn-row" style="justify-content:space-between;align-items:center">
+          <label style="font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input id="sql-backup" type="checkbox" checked>
+            Create automatic database backup before any write query
+          </label>
+          <button type="submit" class="btn btn-primary">Execute SQL</button>
+        </div>
+      </form>
+      <div id="sql-err" style="color:var(--err-text);font-size:13px;font-weight:700;margin-top:10px"></div>
+    </div>
+  </section>
+
+  <!-- TAB 4: UPDATES & BACKUPS -->
   <section id="tab-updates" class="hidden">
     <div class="two-col">
-      <!-- Software Updates Card -->
       <div class="card">
         <div class="card-header">
           <h3 class="card-title">
@@ -1402,25 +1826,14 @@ dialog::backdrop {
           </h3>
           <span id="upd-pill" class="pill ok">Up to date</span>
         </div>
-
         <div id="upd-rows" style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px"></div>
-
         <div class="btn-row">
-          <button type="button" class="btn btn-primary" onclick="act('update_now')">
-            <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
-            Install Latest Release
-          </button>
-          <button type="button" class="btn" onclick="act('update_check')">
-            Check Now
-          </button>
-          <button type="button" class="btn" onclick="askConfirm('rollback', 'Roll back to previous release?', 'This switches /opt/milo/current back to the previous release and restarts MILO.', false)">
-            <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
-            Roll Back
-          </button>
+          <button type="button" class="btn btn-primary" onclick="act('update_now')">Install Latest Release</button>
+          <button type="button" class="btn" onclick="act('update_check')">Check Now</button>
+          <button type="button" class="btn" onclick="askConfirm('rollback', 'Roll back to previous release?', 'This switches /opt/milo/current back to the previous release and restarts MILO.', false)">Roll Back</button>
         </div>
       </div>
 
-      <!-- Database Backups Card -->
       <div class="card">
         <div class="card-header">
           <h3 class="card-title">
@@ -1431,23 +1844,18 @@ dialog::backdrop {
           </h3>
         </div>
         <p style="margin:0 0 14px;font-size:13px;color:var(--muted)">
-          Daily snapshots are stored in <code>/opt/milo/backups</code> and survive software updates and reinstalls.
+          Snapshots are stored in <code>/opt/milo/backups</code> and survive software updates and reinstalls.
         </p>
         <div class="btn-row">
-          <button type="button" class="btn btn-primary" onclick="act('backup_now')">
-            <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-            Create Snapshot Now
-          </button>
-          <button type="button" class="btn" onclick="askConfirm('restore_latest', 'Restore newest database backup?', 'The current database will first be saved as pre-restore-*.db before restoring the latest backup.', false)">
-            Restore Newest Snapshot
-          </button>
+          <button type="button" class="btn btn-primary" onclick="act('backup_now')">Create Snapshot Now</button>
+          <button type="button" class="btn" onclick="askConfirm('restore_latest', 'Restore newest database backup?', 'The current database will first be saved as pre-restore-*.db before restoring the latest backup.', false)">Restore Newest Snapshot</button>
         </div>
         <div id="backups-list" class="backup-list"></div>
       </div>
     </div>
   </section>
 
-  <!-- TAB 3: CONFIGURATION -->
+  <!-- TAB 5: CONFIGURATION -->
   <section id="tab-config" class="hidden">
     <div class="card">
       <div class="card-header">
@@ -1465,12 +1873,10 @@ dialog::backdrop {
           <div class="field">
             <label for="cfg-id">Machine ID</label>
             <input id="cfg-id" type="text" required placeholder="milo-b8b8f7">
-            <div class="field-hint">Unique identifier used in MQTT topics and fleet analytics.</div>
           </div>
           <div class="field">
             <label for="cfg-name">Display Name</label>
             <input id="cfg-name" type="text" required placeholder="MILO Lobby #1">
-            <div class="field-hint">Shown in the PWA header badge and Admin machine selector.</div>
           </div>
           <div class="field">
             <label for="cfg-env">Environment Theme</label>
@@ -1482,9 +1888,17 @@ dialog::backdrop {
             </select>
           </div>
           <div class="field">
+            <label for="cfg-cam">Camera Input Source</label>
+            <select id="cfg-cam">
+              <option value="rpi">Raspberry Pi CSI Camera (--input rpi)</option>
+              <option value="usb">USB Webcam (--input usb)</option>
+              <option value="/dev/video0">V4L2 /dev/video0</option>
+              <option value="default">Hailo default pipeline</option>
+            </select>
+          </div>
+          <div class="field">
             <label for="cfg-host">MQTT Broker Host</label>
             <input id="cfg-host" type="text" required placeholder="127.0.0.1">
-            <div class="field-hint"><code>127.0.0.1</code> for standalone/core machine.</div>
           </div>
           <div class="field">
             <label for="cfg-channel">Update Channel</label>
@@ -1507,27 +1921,16 @@ dialog::backdrop {
           <div class="field">
             <label for="cfg-token">GitHub Personal Access Token (Private Repo)</label>
             <input id="cfg-token" type="password" autocomplete="off" placeholder="Leave blank to keep existing token">
-            <div id="cfg-token-hint" class="field-hint">Read-only Contents permission for OTA updates.</div>
+            <div id="cfg-token-hint" class="field-hint"></div>
           </div>
-        </div>
-
-        <!-- Frontend VITE_MQTT_PASS helper -->
-        <div style="margin-top:18px;padding:14px 16px;border-radius:12px;background:var(--card-alt);border:1px solid var(--border)">
-          <label for="cfg-bpass" style="display:block;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:6px">
-            Web App Broker Password (<code>VITE_MQTT_PASS</code> for user `"browser"`)
-          </label>
-          <div class="input-group">
-            <input id="cfg-bpass" type="text" readonly style="font-family:ui-monospace,monospace;font-weight:700">
-            <button type="button" class="btn" onclick="copyBrowserPass()">
-              <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
-              Copy
-            </button>
+          <div class="field">
+            <label for="cfg-pin">Technician 6-Digit PIN (Read-only)</label>
+            <input id="cfg-pin" type="text" readonly style="font-family:ui-monospace,monospace;font-weight:700">
           </div>
         </div>
 
         <div class="btn-row" style="margin-top:18px">
           <button type="submit" class="btn btn-primary">
-            <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
             Save &amp; Apply (Restart Service)
           </button>
         </div>
@@ -1535,7 +1938,7 @@ dialog::backdrop {
     </div>
   </section>
 
-  <!-- TAB 4: LIVE LOGS -->
+  <!-- TAB 6: LIVE LOGS -->
   <section id="tab-logs" class="hidden">
     <div class="card">
       <div class="card-header">
@@ -1552,14 +1955,8 @@ dialog::backdrop {
             <option value="update">OTA Updater (update.log)</option>
             <option value="install">Installer (install.log)</option>
           </select>
-          <button type="button" class="btn" onclick="loadLogs()">
-            <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
-            Refresh
-          </button>
-          <button type="button" class="btn" onclick="copyLogs()">
-            <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
-            Copy Logs
-          </button>
+          <button type="button" class="btn" onclick="loadLogs()">Refresh</button>
+          <button type="button" class="btn" onclick="copyLogs()">Copy Logs</button>
         </div>
       </div>
       <pre id="logbox" class="log-viewer">Select Refresh to load service logs…</pre>
@@ -1568,7 +1965,7 @@ dialog::backdrop {
 
 </main>
 
-<!-- Native Modal Dialog for Confirmations (follows modern-web-guidance `dialog`) -->
+<!-- Native Modal Dialog (`dialog`) -->
 <dialog id="confirm-dialog" closedby="any" aria-labelledby="confirm-title">
   <div id="confirm-icon" class="dialog-icon">
     <svg class="lucide" style="width:26px;height:26px" viewBox="0 0 24 24" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
@@ -1586,11 +1983,15 @@ dialog::backdrop {
 <script>
 const $ = (s) => document.querySelector(s);
 let pollTimer = null;
+let camTimer = null;
 let cfgLoaded = false;
 let activeTab = 'health';
+let loginMode = 'admin';
 let pendingAction = null;
+let currentDbTable = 'users';
+let cachedDbRows = [];
+let cachedDbCols = [];
 
-// --- Light-dismiss fallback for <dialog closedby="any"> ---
 const confirmDialog = $('#confirm-dialog');
 if (confirmDialog) {
   if (!('closedBy' in HTMLDialogElement.prototype)) {
@@ -1608,15 +2009,16 @@ if (confirmDialog) {
     if (choice === 'confirm' && pendingAction) {
       const toRun = pendingAction;
       pendingAction = null;
-      act(toRun);
+      if (typeof toRun === 'function') toRun();
+      else act(toRun);
     } else {
       pendingAction = null;
     }
   });
 }
 
-function askConfirm(actionName, title, desc, isDanger) {
-  pendingAction = actionName;
+function askConfirm(actionOrFn, title, desc, isDanger) {
+  pendingAction = actionOrFn;
   $('#confirm-title').textContent = title;
   $('#confirm-desc').textContent = desc;
   $('#confirm-icon').className = 'dialog-icon' + (isDanger ? ' danger' : '');
@@ -1624,7 +2026,14 @@ function askConfirm(actionName, title, desc, isDanger) {
   confirmDialog.showModal();
 }
 
-// --- Two-state Dark Mode Toggle (modern-web-guidance `dark-mode-toggle`) ---
+function setLoginMode(mode) {
+  loginMode = mode;
+  $('#lmode-admin').classList.toggle('active', mode === 'admin');
+  $('#lmode-pin').classList.toggle('active', mode === 'pin');
+  $('#login-admin-fields').classList.toggle('hidden', mode !== 'admin');
+  $('#login-pin-fields').classList.toggle('hidden', mode !== 'pin');
+}
+
 function currentRenderedDark() {
   const meta = document.querySelector('meta[name="color-scheme"]');
   const val = meta ? meta.content : 'light dark';
@@ -1662,16 +2071,21 @@ window.addEventListener('storage', (e) => {
 });
 syncThemeIcons();
 
-// --- Tabs ---
 function switchTab(tab) {
   activeTab = tab;
-  document.querySelectorAll('.tab-btn').forEach((b) => {
+  document.querySelectorAll('.tab-btn[data-tab]').forEach((b) => {
     b.classList.toggle('active', b.dataset.tab === tab);
   });
-  ['health', 'updates', 'config', 'logs'].forEach((t) => {
+  ['health', 'camera', 'database', 'updates', 'config', 'logs'].forEach((t) => {
     $('#tab-' + t).classList.toggle('hidden', t !== tab);
   });
+  clearInterval(camTimer);
   if (tab === 'logs') loadLogs();
+  if (tab === 'database') loadDbTables();
+  if (tab === 'camera') {
+    pollCamera();
+    camTimer = setInterval(pollCamera, 1200);
+  }
 }
 
 function toast(msg, ms = 3200) {
@@ -1704,6 +2118,7 @@ function show(authed) {
   $('#logout-btn').classList.toggle('hidden', !authed);
   $('#hdr-machine-pill').classList.toggle('hidden', !authed);
   clearInterval(pollTimer);
+  clearInterval(camTimer);
   if (authed) {
     refresh();
     pollTimer = setInterval(refresh, 6000);
@@ -1713,14 +2128,23 @@ function show(authed) {
 async function login(e) {
   e.preventDefault();
   $('#login-err').textContent = '';
+  const payload = loginMode === 'pin'
+    ? { pin: $('#pin').value }
+    : { username: $('#login-user').value, password: $('#login-pass').value };
   const r = await fetch('/api/login', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ pin: $('#pin').value }),
+    body: JSON.stringify(payload),
   });
   const d = await r.json().catch(() => ({}));
-  if (r.ok) { $('#pin').value = ''; cfgLoaded = false; show(true); }
-  else { $('#login-err').textContent = d.error || 'Login failed'; }
+  if (r.ok) {
+    $('#pin').value = '';
+    $('#login-pass').value = '';
+    cfgLoaded = false;
+    show(true);
+  } else {
+    $('#login-err').textContent = d.error || 'Login failed';
+  }
 }
 
 async function logout() {
@@ -1740,10 +2164,12 @@ async function refresh() {
   const checks = doc.checks || [];
   const overall = doc.overall || 'fail';
 
-  // Header machine pill
+  if (d.config?.site) {
+    $('#hdr-pwa-link').href = d.config.site;
+  }
+
   $('#hdr-machine-text').textContent = `${doc.machine_name || doc.machine_id || 'MILO'} · v${doc.version || '?'}`;
 
-  // Hero banner
   const hb = $('#hero-banner');
   hb.className = 'hero-banner ' + overall;
   $('#hero-orb').className = 'status-orb ' + overall;
@@ -1756,7 +2182,6 @@ async function refresh() {
       : `${failCount} system check${failCount === 1 ? ' needs' : 's need'} attention`;
   $('#hero-sub').textContent = `Machine ID: ${doc.machine_id || '?'} · Role: ${doc.role || 'both'} · Release: ${doc.version || '?'}`;
 
-  // Health tab badge
   const hBadge = $('#tab-health-badge');
   if (failCount > 0) {
     hBadge.textContent = failCount;
@@ -1766,7 +2191,6 @@ async function refresh() {
     hBadge.classList.add('hidden');
   }
 
-  // 4 KPI Cards
   const cApp = findCheck(checks, 'svc_milo-') || { status: 'warn', detail: 'unknown' };
   $('#kpi-app-val').textContent = cApp.status === 'ok' ? 'Running' : 'Stopped';
   $('#kpi-app-det').textContent = cApp.detail || '';
@@ -1792,7 +2216,6 @@ async function refresh() {
   $('#kpi-db-det').textContent = cTemp ? `CPU Temp: ${cTemp.detail}` : 'Storage healthy';
   $('#kpi-db-dot').className = 'check-dot ' + cDb.status;
 
-  // Diagnostic Checklist Grid
   $('#checks-grid').innerHTML = checks.map((c) => `
     <div class="check-item ${esc(c.status)}">
       <div class="check-left">
@@ -1803,7 +2226,6 @@ async function refresh() {
     </div>
   `).join('');
 
-  // Updates & Backups Tab
   const u = d.update || {};
   const upPill = $('#upd-pill');
   upPill.className = 'pill ' + (u.update_available ? 'warn' : (u.status === 'ok' ? 'ok' : 'warn'));
@@ -1832,23 +2254,22 @@ async function refresh() {
       `).join('')
     : '<p style="font-size:13px;color:var(--muted);margin:8px 0 0">No database backups created yet.</p>';
 
-  // Configuration Form (populate once so we never overwrite while typing)
   if (!cfgLoaded && d.config) {
     $('#cfg-id').value = d.config.machine_id || '';
     $('#cfg-name').value = d.config.machine_name || '';
     $('#cfg-env').value = d.config.machine_env || '';
+    $('#cfg-cam').value = d.config.camera_input || 'rpi';
     $('#cfg-host').value = d.config.mqtt_host || '127.0.0.1';
     $('#cfg-channel').value = d.config.channel || 'stable';
     $('#cfg-auto').value = d.config.auto_update ? '1' : '0';
     $('#cfg-repo').value = d.config.repo || 'EKOKIBO/MILO-Backend';
-    $('#cfg-bpass').value = d.config.browser_pass || '';
+    $('#cfg-pin').value = d.config.ui_pin || '';
     $('#cfg-token-hint').textContent = d.config.has_github_token
       ? '✓ A GitHub token is currently saved in config.env. Leave blank to keep it.'
       : 'Optional: required only if your GitHub repository is Private.';
     cfgLoaded = true;
   }
 
-  // Background Job Output
   const j = d.job || {};
   const jc = $('#job-card');
   if (j.running || (j.finished_at && (d.now - j.finished_at) < 120)) {
@@ -1864,11 +2285,141 @@ async function refresh() {
   }
 }
 
+async function pollCamera() {
+  try {
+    const st = await (await api('/api/camera/state')).json();
+    const wp = $('#cam-wake-pill');
+    if (st.awake) {
+      wp.className = 'pill ok';
+      wp.textContent = `Awake — Scanning for User ${st.user_code || '?'}`;
+    } else {
+      wp.className = 'pill warn';
+      wp.textContent = 'Idle (Waiting for RFID or Simulate button)';
+    }
+    if (st.has_frame) {
+      const img = $('#cam-img');
+      img.src = '/api/camera/frame.jpg?t=' + Date.now();
+      img.classList.remove('hidden');
+      $('#cam-empty').classList.add('hidden');
+    }
+    const dets = st.detections || [];
+    $('#cam-dets').innerHTML = dets.length
+      ? dets.map((d) => `
+          <div class="backup-row">
+            <span style="font-weight:800;text-transform:capitalize">${esc(d.label)}</span>
+            <span class="pill ok">${Math.round((d.confidence || 0) * 100)}% confidence</span>
+          </div>
+        `).join('')
+      : `<div class="backup-row"><span style="color:var(--muted)">No objects detected in current frame${st.frame_age_sec !== null ? ` (frame age: ${st.frame_age_sec}s)` : ''}</span></div>`;
+  } catch {}
+}
+
+async function loadDbTables() {
+  try {
+    const d = await (await api('/api/db/tables')).json();
+    const tables = d.tables || [];
+    $('#db-table-pills').innerHTML = tables.map((t) => `
+      <button type="button" class="btn ${t.name === currentDbTable ? 'btn-primary' : ''}" onclick="selectDbTable('${esc(t.name)}')">
+        ${esc(t.name)} <span style="opacity:0.75;font-size:11px">(${t.count})</span>
+      </button>
+    `).join('');
+    if (tables.length) {
+      if (!tables.some((t) => t.name === currentDbTable)) currentDbTable = tables[0].name;
+      await selectDbTable(currentDbTable);
+    }
+  } catch {}
+}
+
+async function selectDbTable(name) {
+  currentDbTable = name;
+  document.querySelectorAll('#db-table-pills .btn').forEach((b) => {
+    b.classList.toggle('btn-primary', b.textContent.trim().startsWith(name + ' '));
+  });
+  const d = await (await api('/api/db/table?name=' + encodeURIComponent(name))).json();
+  if (d.error) {
+    $('#db-table-caption').textContent = `${name} — ${d.error}`;
+    $('#db-thead').innerHTML = '';
+    $('#db-tbody').innerHTML = '';
+    return;
+  }
+  cachedDbCols = d.columns || [];
+  cachedDbRows = d.rows || [];
+  renderDbTable(name, cachedDbCols, cachedDbRows, true);
+}
+
+function renderDbTable(title, cols, rows, allowDelete) {
+  $('#db-table-caption').textContent = `${title} (${rows.length} rows shown)`;
+  $('#db-thead').innerHTML = `<tr>${cols.map((c) => `<th>${esc(c)}</th>`).join('')}${allowDelete ? '<th>Action</th>' : ''}</tr>`;
+  if (!rows.length) {
+    $('#db-tbody').innerHTML = `<tr><td colspan="${cols.length + 1}" style="text-align:center;color:var(--muted);padding:20px">Table is empty</td></tr>`;
+    return;
+  }
+  $('#db-tbody').innerHTML = rows.map((r) => {
+    const rowid = r[0];
+    const cells = r.map((val, idx) => idx === 0
+      ? `<th>${esc(val)}</th>`
+      : `<td data-label="${esc(cols[idx] || '')}" title="${esc(val)}">${esc(val)}</td>`
+    ).join('');
+    const delBtn = allowDelete
+      ? `<td data-label="Action"><button type="button" class="btn btn-danger" style="padding:4px 8px;font-size:11px" onclick="deleteDbRow('${esc(currentDbTable)}', ${Number(rowid)})">Delete</button></td>`
+      : '';
+    return `<tr>${cells}${delBtn}</tr>`;
+  }).join('');
+}
+
+function filterDbRows() {
+  const q = ($('#db-search').value || '').toLowerCase().trim();
+  if (!q) {
+    renderDbTable(currentDbTable, cachedDbCols, cachedDbRows, true);
+    return;
+  }
+  const filtered = cachedDbRows.filter((r) => r.some((cell) => String(cell).toLowerCase().includes(q)));
+  renderDbTable(currentDbTable, cachedDbCols, filtered, true);
+}
+
+function deleteDbRow(table, rowid) {
+  askConfirm(async () => {
+    const r = await api('/api/db/delete_row', {
+      method: 'POST',
+      body: JSON.stringify({ table, rowid }),
+    });
+    if (r.ok) {
+      toast(`Deleted row #${rowid} from ${table}`);
+      loadDbTables();
+    } else {
+      toast('Could not delete row');
+    }
+  }, `Delete row #${rowid} from ${table}?`, 'This row will be permanently removed from the SQLite database.', true);
+}
+
+function setSqlPreset(q) {
+  $('#sql-input').value = q;
+}
+
+async function runSqlQuery(e) {
+  e.preventDefault();
+  $('#sql-err').textContent = '';
+  const sql = $('#sql-input').value.trim();
+  if (!sql) return;
+  const r = await api('/api/db/query', {
+    method: 'POST',
+    body: JSON.stringify({ sql, backup_first: $('#sql-backup').checked }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || !d.ok) {
+    $('#sql-err').textContent = d.error || 'SQL execution failed';
+    return;
+  }
+  toast('SQL query executed');
+  renderDbTable('SQL Query Result', d.columns || [], d.rows || [], false);
+}
+
 async function act(name) {
   const r = await api('/api/action', { method: 'POST', body: JSON.stringify({ action: name }) });
   const d = await r.json().catch(() => ({}));
-  toast(r.ok ? `Started: ${name.replace(/_/g, ' ')}` : (d.message || d.error || 'Could not start task'));
-  setTimeout(refresh, 400);
+  toast(r.ok ? (d.message && d.message !== 'started' ? d.message : `Started: ${name.replace(/_/g, ' ')}`) : (d.message || d.error || 'Could not start task'));
+  setTimeout(refresh, 500);
+  if (activeTab === 'camera') setTimeout(pollCamera, 600);
 }
 
 async function saveConfig(e) {
@@ -1877,6 +2428,7 @@ async function saveConfig(e) {
     machine_id: $('#cfg-id').value,
     machine_name: $('#cfg-name').value,
     machine_env: $('#cfg-env').value,
+    camera_input: $('#cfg-cam').value,
     mqtt_host: $('#cfg-host').value,
     channel: $('#cfg-channel').value,
     auto_update: $('#cfg-auto').value === '1',
@@ -1896,12 +2448,6 @@ async function saveConfig(e) {
   }
 }
 
-function copyBrowserPass() {
-  const val = $('#cfg-bpass').value;
-  if (!val) return;
-  navigator.clipboard.writeText(val).then(() => toast('Copied VITE_MQTT_PASS to clipboard')).catch(() => {});
-}
-
 async function loadLogs() {
   const lb = $('#logbox');
   const src = $('#log-source').value || 'core';
@@ -1915,7 +2461,10 @@ function copyLogs() {
   navigator.clipboard.writeText(txt).then(() => toast('Logs copied to clipboard')).catch(() => {});
 }
 
-fetch('/api/session').then((r) => r.json()).then((d) => show(d.authed)).catch(() => show(false));
+fetch('/api/session').then((r) => r.json()).then((d) => {
+  if (d.site) $('#hdr-pwa-link').href = d.site;
+  show(d.authed);
+}).catch(() => show(false));
 </script>
 </body></html>
 """
@@ -1928,7 +2477,7 @@ def main():
         pass
     cfg = read_config()
     if not cfg.get('MILO_UI_PIN'):
-        print('[WARN] No MILO_UI_PIN in config.env — the UI will refuse every login.')
+        print('[WARN] No MILO_UI_PIN in config.env — use Admin username/password to log in.')
     srv = ThreadingHTTPServer(('0.0.0.0', PORT), Handler)
     srv.daemon_threads = True
     print(f'[MILO] Config & Repair UI on http://0.0.0.0:{PORT} (machine {cfg.get("MILO_MACHINE_ID", "?")})')
