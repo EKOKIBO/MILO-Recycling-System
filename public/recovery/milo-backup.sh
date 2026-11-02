@@ -16,6 +16,7 @@
 set -Eeuo pipefail
 
 MILO_ROOT="${MILO_ROOT:-/opt/milo}"
+cd "${MILO_ROOT}" 2>/dev/null || cd /
 CONFIG_FILE="${MILO_ROOT}/data/config.env"
 [[ -f "$CONFIG_FILE" ]] && set -a && . "$CONFIG_FILE" 2>/dev/null && set +a
 

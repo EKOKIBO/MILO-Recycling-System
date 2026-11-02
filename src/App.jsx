@@ -33,7 +33,7 @@ const MQTT_PASS = import.meta.env?.VITE_MQTT_PASS || 'milo_browser_public';
 // the private half lives ONLY on the Pi as MILO_VAPID_PRIVATE_KEY).
 const VAPID_PUBLIC_KEY = import.meta.env?.VITE_VAPID_PUBLIC_KEY || 'BFEREDv8zD4h3UumMdzp-aV4S7KusQAlb_0ihjhh72A3_y-dYtvaEYuNfHGqRzGbvVdZu2kdFlwwCT1jJVUXZvg';
 const NS = 'milo_v2_system';
-const FRONTEND_BUILD = '2026-11-02.1'; // shown in the admin bar next to the backend build
+const FRONTEND_BUILD = '2026-11-02.2'; // shown in the admin bar next to the backend build
 
 // ==========================================
 // MAIN APP COMPONENT

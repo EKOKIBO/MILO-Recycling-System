@@ -12,6 +12,7 @@
 set -uo pipefail
 
 MILO_ROOT="${MILO_ROOT:-/opt/milo}"
+cd "${MILO_ROOT}" 2>/dev/null || cd /
 CONFIG_FILE="${MILO_ROOT}/data/config.env"
 [[ -f "$CONFIG_FILE" ]] && set -a && . "$CONFIG_FILE" 2>/dev/null && set +a
 
@@ -71,6 +72,111 @@ fi
   || { check fail venv "Python environment" "missing"; note "sudo bash install.sh --repair"; }
 [[ -f "$CONFIG_FILE" ]] && check ok config "Configuration" "$CONFIG_FILE" || check fail config "Configuration" "missing config.env"
 
+# --- Self-Heal Helpers (used when --heal is passed) --------------------------
+heal_mosquitto() {
+  command -v mosquitto >/dev/null 2>&1 || return 1
+  local pwfile=/etc/mosquitto/milo_passwd
+  local aclfile=/etc/mosquitto/milo_acl
+  mkdir -p /etc/mosquitto/conf.d /var/lib/mosquitto /var/log/mosquitto /run/mosquitto 2>/dev/null || true
+  chown -R mosquitto:mosquitto /var/lib/mosquitto /var/log/mosquitto /run/mosquitto 2>/dev/null || true
+
+  if [[ -n "${MILO_CORE_MQTT_PASS:-${MILO_MQTT_PASS:-}}" ]] && command -v mosquitto_passwd >/dev/null 2>&1; then
+    rm -f "$pwfile"; touch "$pwfile"; chmod 640 "$pwfile"
+    mosquitto_passwd -b "$pwfile" pi_backend "${MILO_CORE_MQTT_PASS:-${MILO_MQTT_PASS}}" >/dev/null 2>&1 || true
+    [[ -n "${MILO_BROWSER_PASS:-}" ]] && mosquitto_passwd -b "$pwfile" browser "${MILO_BROWSER_PASS}" >/dev/null 2>&1 || true
+    [[ -n "${MILO_EDGE_PASS:-}" ]] && mosquitto_passwd -b "$pwfile" edge "${MILO_EDGE_PASS}" >/dev/null 2>&1 || true
+    chown root:mosquitto "$pwfile" 2>/dev/null || true
+    chmod 640 "$pwfile" 2>/dev/null || true
+  fi
+
+  if [[ -f "${MILO_ROOT}/current/mosquitto_aclfile_2" ]]; then
+    install -m 640 "${MILO_ROOT}/current/mosquitto_aclfile_2" "$aclfile" 2>/dev/null || true
+    chown root:mosquitto "$aclfile" 2>/dev/null || true
+  fi
+
+  if [[ -f /etc/mosquitto/mosquitto.conf && ! -f /etc/mosquitto/mosquitto.conf.pre-milo ]]; then
+    cp -a /etc/mosquitto/mosquitto.conf /etc/mosquitto/mosquitto.conf.pre-milo 2>/dev/null || true
+  fi
+  cat > /etc/mosquitto/mosquitto.conf <<'EOF'
+# Managed by the MILO installer — local overrides belong in /etc/mosquitto/conf.d/
+pid_file /run/mosquitto/mosquitto.pid
+
+persistence true
+persistence_location /var/lib/mosquitto/
+
+log_dest file /var/log/mosquitto/mosquitto.log
+
+include_dir /etc/mosquitto/conf.d
+EOF
+
+  for f in /etc/mosquitto/conf.d/*.conf; do
+    [[ -f "$f" ]] || continue
+    local base; base="$(basename "$f")"
+    if [[ "$base" != "milo.conf" && "$base" != "bridge.conf" ]]; then
+      mv -f "$f" "${f}.disabled-by-milo" 2>/dev/null || true
+    fi
+  done
+
+  cat > /etc/mosquitto/conf.d/milo.conf <<EOF
+# Managed by the MILO installer — do not edit by hand.
+per_listener_settings false
+allow_anonymous false
+password_file ${pwfile}
+acl_file ${aclfile}
+
+listener 1883 127.0.0.1
+protocol mqtt
+
+listener 9001 127.0.0.1
+protocol websockets
+
+max_packet_size 1048576
+message_size_limit 1048576
+EOF
+  systemctl restart mosquitto.service >/dev/null 2>&1 || true
+}
+
+heal_hailo_python() {
+  local py="${MILO_ROOT}/venv/bin/python"
+  [[ -x "$py" ]] || return 1
+  local venv_site; venv_site="$("$py" -c 'import site; print(site.getsitepackages()[0])' 2>/dev/null || true)"
+  [[ -n "$venv_site" && -d "$venv_site" ]] || return 1
+  local pth_file="${venv_site}/milo_hailo.pth"
+  : > "$pth_file"
+
+  if ! "$py" -c "import hailo_apps" >/dev/null 2>&1; then
+    local found_apps=""
+    while IFS= read -r d; do
+      [[ -d "$d" ]] || continue
+      found_apps="$(dirname "$d")"
+      break
+    done < <(find /opt /home /root /usr/local -maxdepth 5 -type d -name 'hailo_apps' 2>/dev/null || true)
+
+    if [[ -z "$found_apps" ]] && command -v git >/dev/null 2>&1; then
+      rm -rf "${MILO_ROOT}/hailo-apps-infra"
+      if git clone --depth 1 https://github.com/hailo-ai/hailo-apps-infra.git "${MILO_ROOT}/hailo-apps-infra" >/dev/null 2>&1; then
+        found_apps="${MILO_ROOT}/hailo-apps-infra"
+        "$py" -m pip install --quiet --no-deps -e "${MILO_ROOT}/hailo-apps-infra" >/dev/null 2>&1 || true
+      fi
+    fi
+    [[ -n "$found_apps" ]] && echo "$found_apps" >> "$pth_file"
+  fi
+
+  if ! "$py" -c "import hailo" >/dev/null 2>&1; then
+    while IFS= read -r sp; do
+      [[ -d "$sp" && "$sp" != "$venv_site" ]] || continue
+      echo "$sp" >> "$pth_file"
+      break
+    done < <(find /usr/lib /usr/local/lib /home /opt -maxdepth 6 \( -name 'hailo*.so' -o -name 'hailo_platform' \) 2>/dev/null | xargs -r -n1 dirname 2>/dev/null | sort -u || true)
+  fi
+}
+
+if [[ $HEAL -eq 1 && "$ROLE" != "core" ]]; then
+  if ! "${MILO_ROOT}/venv/bin/python" -c "import hailo, hailo_apps" >/dev/null 2>&1; then
+    heal_hailo_python || true
+  fi
+fi
+
 # --- Services ----------------------------------------------------------------
 section "Services"
 svc_check() {
@@ -84,6 +190,7 @@ svc_check() {
     check ok "svc_${unit%%.*}" "$label" "active since ${since:-?}"
   else
     if [[ $HEAL -eq 1 ]]; then
+      [[ "$unit" == "mosquitto.service" ]] && heal_mosquitto || true
       systemctl restart "$unit" >/dev/null 2>&1
       sleep 2
       if systemctl is-active --quiet "$unit"; then
@@ -96,8 +203,8 @@ svc_check() {
     note "journalctl -u ${unit} -n 40"
   fi
 }
-svc_check "$MAIN_UNIT" "MILO application"
 [[ "${MILO_MQTT_HOST:-127.0.0.1}" == "127.0.0.1" ]] && svc_check mosquitto.service "MQTT broker"
+svc_check "$MAIN_UNIT" "MILO application"
 svc_check milo-config-ui.service "Repair UI" 0
 
 for tmr in milo-update.timer milo-health.timer milo-backup.timer; do
@@ -112,12 +219,23 @@ done
 
 # --- Connectivity ------------------------------------------------------------
 section "Connectivity"
-if command -v mosquitto_sub >/dev/null 2>&1 && [[ -n "${MILO_MQTT_PASS:-}" ]]; then
-  if timeout 6 mosquitto_sub -h "${MILO_MQTT_HOST:-127.0.0.1}" -p "${MILO_MQTT_PORT:-1883}" \
-       -u "${MILO_MQTT_USER:-pi_backend}" -P "${MILO_MQTT_PASS}" -t '$SYS/broker/version' -C 1 -W 5 >/dev/null 2>&1; then
-    check ok mqtt "Broker login" "${MILO_MQTT_HOST:-127.0.0.1}:${MILO_MQTT_PORT:-1883}"
+mqtt_auth_ok() {
+  if command -v mosquitto_pub >/dev/null 2>&1; then
+    timeout 5 mosquitto_pub -h "${MILO_MQTT_HOST:-127.0.0.1}" -p "${MILO_MQTT_PORT:-1883}" \
+      -u "${MILO_MQTT_USER:-pi_backend}" -P "${MILO_MQTT_PASS}" \
+      -t "milo_v2_system/health/ping" -m "ok" >/dev/null 2>&1
   else
-    check fail mqtt "Broker login" "cannot authenticate — password mismatch?"
+    timeout 6 mosquitto_sub -h "${MILO_MQTT_HOST:-127.0.0.1}" -p "${MILO_MQTT_PORT:-1883}" \
+      -u "${MILO_MQTT_USER:-pi_backend}" -P "${MILO_MQTT_PASS}" -t '$SYS/broker/version' -C 1 -W 5 >/dev/null 2>&1
+  fi
+}
+if (command -v mosquitto_pub >/dev/null 2>&1 || command -v mosquitto_sub >/dev/null 2>&1) && [[ -n "${MILO_MQTT_PASS:-}" ]]; then
+  if mqtt_auth_ok; then
+    check ok mqtt "Broker login" "${MILO_MQTT_HOST:-127.0.0.1}:${MILO_MQTT_PORT:-1883}"
+  elif [[ $HEAL -eq 1 && "${MILO_MQTT_HOST:-127.0.0.1}" == "127.0.0.1" ]] && heal_mosquitto && sleep 1 && mqtt_auth_ok; then
+    check warn mqtt "Broker login" "rewrote broker credentials & healed connection"
+  else
+    check fail mqtt "Broker login" "cannot authenticate — password mismatch or broker down"
     note "sudo bash install.sh --repair   (rewrites broker passwords)"
   fi
 else
@@ -158,10 +276,13 @@ if [[ "$ROLE" != "core" ]]; then
   [[ -e "$SP" ]] && check ok serial "Serial link (Arduino)" "$SP" \
                  || { check fail serial "Serial link (Arduino)" "${SP} not found"; note "Enable UART: sudo raspi-config → Interface → Serial"; }
 
-  if "${MILO_ROOT}/venv/bin/python" -c "import hailo, hailo_apps" >/dev/null 2>&1; then
-    check ok hailopy "Hailo Python bindings" "importable"
+  if "${MILO_ROOT}/venv/bin/python" -c "import sys; sys.path.insert(0, '${MILO_ROOT}/current'); import milo_vision, hailo, hailo_apps" >/dev/null 2>&1; then
+    check ok hailopy "Hailo Python bindings" "hailo + hailo_apps ready"
+  elif "${MILO_ROOT}/venv/bin/python" -c "import sys; sys.path.insert(0, '${MILO_ROOT}/current'); import milo_vision, hailo" >/dev/null 2>&1; then
+    check warn hailopy "Hailo Python bindings" "hailo ok, hailo_apps missing (Core + Serial still run)"
+    note "sudo milo-doctor --heal   (auto-clones & links hailo-apps-infra)"
   else
-    check fail hailopy "Hailo Python bindings" "import failed"
+    check warn hailopy "Hailo Python bindings" "hailo not importable (Core + Serial still run)"
     note "sudo apt install --reinstall hailo-all && sudo reboot"
   fi
 fi

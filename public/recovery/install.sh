@@ -30,29 +30,34 @@ set -Eeuo pipefail
 
 MILO_KIT_VERSION="1.0.0"
 
+# Guard against running from an unlinked release directory (prevents getcwd spam).
+pwd >/dev/null 2>&1 || cd "${MILO_ROOT:-/opt/milo}" 2>/dev/null || cd /
+
 # --- Deployment settings -----------------------------------------------------
 # kit.conf sits next to this script and holds YOUR repo/site/model addresses.
 # Edit that one file rather than hunting through the scripts. Values already
 # present in the environment always win, so flags and `MILO_REPO=... bash
 # install.sh` still override it.
-KIT_CONF="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/kit.conf"
-if [[ -f "$KIT_CONF" ]]; then
+KIT_CONF=""
+if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+  KIT_CONF="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/kit.conf"
+fi
+if [[ -n "$KIT_CONF" && -f "$KIT_CONF" ]]; then
   # shellcheck disable=SC1090
   . "$KIT_CONF"
 fi
 
 # --- Defaults (override with flags or environment) ---------------------------
 MILO_ROOT="${MILO_ROOT:-/opt/milo}"
-MILO_REPO="${MILO_REPO:-milo-robotics/milo}"          # GitHub owner/repo
+MILO_REPO="${MILO_REPO:-EKOKIBO/MILO-Backend}"         # GitHub owner/repo
 MILO_BRANCH="${MILO_BRANCH:-main}"
 MILO_CHANNEL="${MILO_CHANNEL:-stable}"                 # stable | beta
-MILO_SITE="${MILO_SITE:-}"                             # empty = app uses its own origin
-# Only derive a model host from the site if a site was actually configured,
+MILO_SITE="${MILO_SITE:-https://milo-robotics.org}"    # empty = app uses its own origin
+# Only derive a model host from the site if explicitly provided via MILO_MODEL_BASE,
 # otherwise leave it empty so the installer adopts a local .hef instead of
 # trying to download from a nonsensical URL.
-if [[ -z "${MILO_MODEL_BASE:-}" && -n "$MILO_SITE" ]]; then MILO_MODEL_BASE="${MILO_SITE}/models"; fi
 MILO_MODEL_BASE="${MILO_MODEL_BASE:-}"
-MILO_VAPID_SUBJECT="${MILO_VAPID_SUBJECT:-mailto:admin@example.org}"
+MILO_VAPID_SUBJECT="${MILO_VAPID_SUBJECT:-mailto:emikalchev@gmail.com}"
 SOURCE_MODE="github"                                   # github | url | local
 SOURCE_URL=""
 SOURCE_FILE=""
@@ -531,10 +536,52 @@ else
 fi
 
 if [[ "$ROLE" != "core" ]]; then
+  VENV_SITE="$("$PY" -c 'import site; print(site.getsitepackages()[0])' 2>/dev/null || true)"
+  PTH_FILE="${VENV_SITE:+$VENV_SITE/milo_hailo.pth}"
+  [[ -n "$PTH_FILE" ]] && : > "$PTH_FILE"
+
+  # 1) Ensure hailo_apps is reachable in the venv: adopt an existing checkout
+  #    on the Pi or clone hailo-apps-infra into /opt/milo/hailo-apps-infra.
+  if ! "$PY" -c "import hailo_apps" >/dev/null 2>&1; then
+    FOUND_APPS=""
+    while IFS= read -r d; do
+      [[ -d "$d" ]] || continue
+      FOUND_APPS="$(dirname "$d")"
+      break
+    done < <(find /opt /home /root /usr/local -maxdepth 5 -type d -name 'hailo_apps' 2>/dev/null || true)
+
+    if [[ -z "$FOUND_APPS" ]] && command -v git >/dev/null 2>&1; then
+      info "Fetching hailo-apps-infra into ${MILO_ROOT}/hailo-apps-infra..."
+      rm -rf "${MILO_ROOT}/hailo-apps-infra"
+      if git clone --depth 1 https://github.com/hailo-ai/hailo-apps-infra.git "${MILO_ROOT}/hailo-apps-infra" >>"$LOG_FILE" 2>&1; then
+        FOUND_APPS="${MILO_ROOT}/hailo-apps-infra"
+        "$PY" -m pip install --quiet --no-deps -e "${MILO_ROOT}/hailo-apps-infra" >>"$LOG_FILE" 2>&1 || true
+      fi
+    fi
+
+    if [[ -n "$FOUND_APPS" && -n "$PTH_FILE" ]]; then
+      echo "$FOUND_APPS" >> "$PTH_FILE"
+      info "Linked hailo_apps from ${FOUND_APPS}"
+    fi
+  fi
+
+  # 2) Ensure hailo Python bindings are reachable: if not in system dist-packages,
+  #    adopt any existing site-packages directory on the Pi that has hailo*.
+  if ! "$PY" -c "import hailo" >/dev/null 2>&1; then
+    while IFS= read -r sp; do
+      [[ -d "$sp" && "$sp" != "$VENV_SITE" ]] || continue
+      if [[ -n "$PTH_FILE" ]]; then
+        echo "$sp" >> "$PTH_FILE"
+        info "Linked Hailo site-packages from ${sp}"
+        break
+      fi
+    done < <(find /usr/lib /usr/local/lib /home /opt -maxdepth 6 \( -name 'hailo*.so' -o -name 'hailo_platform' \) 2>/dev/null | xargs -r -n1 dirname 2>/dev/null | sort -u || true)
+  fi
+
   "$PY" -c "import hailo" >/dev/null 2>&1 && ok "Hailo python bindings reachable" \
     || warn "'import hailo' failed — install hailo-all and reboot, then re-run --repair"
   "$PY" -c "import hailo_apps" >/dev/null 2>&1 && ok "hailo_apps reachable" \
-    || warn "'import hailo_apps' failed — install hailo-apps-infra (see RECOVERY.md)"
+    || warn "'import hailo_apps' failed — MILO Core + Serial will still run without local camera pipeline"
 fi
 
 # =============================================================================
@@ -699,21 +746,54 @@ if [[ $DO_MOSQUITTO -eq 1 ]] && command -v mosquitto >/dev/null 2>&1; then
   PWFILE=/etc/mosquitto/milo_passwd
   ACLFILE=/etc/mosquitto/milo_acl
 
+  mkdir -p /etc/mosquitto/conf.d /var/lib/mosquitto /var/log/mosquitto /run/mosquitto
+  chown -R mosquitto:mosquitto /var/lib/mosquitto /var/log/mosquitto /run/mosquitto 2>/dev/null || true
+
   # Passwords are rewritten from config.env every run, so the broker and the
   # app can never drift apart (a classic "everything looks fine but nothing
   # works" failure).
-  rm -f "$PWFILE"; touch "$PWFILE"; chmod 600 "$PWFILE"
+  rm -f "$PWFILE"; touch "$PWFILE"; chmod 640 "$PWFILE"
   mosquitto_passwd -b "$PWFILE" pi_backend "$MQTT_PASS" 2>>"$LOG_FILE"
   mosquitto_passwd -b "$PWFILE" browser   "$BROWSER_PASS" 2>>"$LOG_FILE"
   mosquitto_passwd -b "$PWFILE" edge      "$EDGE_PASS" 2>>"$LOG_FILE"
+  chown root:mosquitto "$PWFILE" 2>/dev/null || true
+  chmod 640 "$PWFILE" 2>/dev/null || true
   ok "Broker users: pi_backend, browser, edge"
 
   if [[ -f "${RELEASE_DIR}/mosquitto_aclfile_2" ]]; then
-    install -m 644 "${RELEASE_DIR}/mosquitto_aclfile_2" "$ACLFILE"
+    install -m 640 "${RELEASE_DIR}/mosquitto_aclfile_2" "$ACLFILE"
+    chown root:mosquitto "$ACLFILE" 2>/dev/null || true
     ok "ACL installed from the release"
   else
     warn "mosquitto_aclfile_2 missing from the package — broker ACL not updated"
   fi
+
+  # Ensure /etc/mosquitto/mosquitto.conf is clean and does not contain old
+  # manual listener/password_file/acl_file lines that collide with conf.d/milo.conf.
+  if [[ -f /etc/mosquitto/mosquitto.conf && ! -f /etc/mosquitto/mosquitto.conf.pre-milo ]]; then
+    cp -a /etc/mosquitto/mosquitto.conf /etc/mosquitto/mosquitto.conf.pre-milo 2>/dev/null || true
+  fi
+  cat > /etc/mosquitto/mosquitto.conf <<'EOF'
+# Managed by the MILO installer — local overrides belong in /etc/mosquitto/conf.d/
+pid_file /run/mosquitto/mosquitto.pid
+
+persistence true
+persistence_location /var/lib/mosquitto/
+
+log_dest file /var/log/mosquitto/mosquitto.log
+
+include_dir /etc/mosquitto/conf.d
+EOF
+
+  # Disable any conflicting third-party or manual .conf files in conf.d/
+  for f in /etc/mosquitto/conf.d/*.conf; do
+    [[ -f "$f" ]] || continue
+    base="$(basename "$f")"
+    if [[ "$base" != "milo.conf" && "$base" != "bridge.conf" ]]; then
+      mv -f "$f" "${f}.disabled-by-milo" 2>/dev/null || true
+      info "Disabled conflicting mosquitto config: ${base}"
+    fi
+  done
 
   cat > /etc/mosquitto/conf.d/milo.conf <<EOF
 # Managed by the MILO installer — do not edit by hand.
@@ -723,13 +803,13 @@ password_file ${PWFILE}
 acl_file ${ACLFILE}
 
 listener 1883 127.0.0.1
+protocol mqtt
+
 listener 9001 127.0.0.1
 protocol websockets
 
 max_packet_size 1048576
 message_size_limit 1048576
-persistence true
-persistence_location /var/lib/mosquitto/
 EOF
   ok "Broker listens on 127.0.0.1 (1883 MQTT, 9001 websockets)"
   info "Browsers reach it through the cloudflared tunnel, as before"
@@ -822,7 +902,7 @@ RestartSec=5
 User=root
 EnvironmentFile=${CONFIG_FILE}
 Environment=MILO_ROOT=${MILO_ROOT}
-WorkingDirectory=${CURRENT_LINK}
+WorkingDirectory=${MILO_ROOT}
 
 [Install]
 WantedBy=multi-user.target

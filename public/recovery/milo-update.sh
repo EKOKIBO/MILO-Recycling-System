@@ -19,10 +19,11 @@
 set -Eeuo pipefail
 
 MILO_ROOT="${MILO_ROOT:-/opt/milo}"
+cd "${MILO_ROOT}" 2>/dev/null || cd /
 CONFIG_FILE="${MILO_ROOT}/data/config.env"
 [[ -f "$CONFIG_FILE" ]] && set -a && . "$CONFIG_FILE" 2>/dev/null && set +a
 
-REPO="${MILO_REPO:-milo-robotics/milo}"
+REPO="${MILO_REPO:-EKOKIBO/MILO-Backend}"
 BRANCH="${MILO_BRANCH:-main}"
 CHANNEL="${MILO_CHANNEL:-stable}"
 STATE_FILE="${MILO_ROOT}/data/installed.json"

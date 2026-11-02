@@ -2,20 +2,22 @@
 """
 MILO Config & Repair UI
 =======================
-A small web interface served BY THE MACHINE ITSELF, so a technician on the same
-network can diagnose, configure, update or restore it without a keyboard, a
-monitor or any SSH knowledge:
+A local web interface served BY THE MACHINE ITSELF, styled with the exact same
+visual language, mascot logo, and Lucide icon set as the MILO Recycling System
+PWA so technicians can diagnose, configure, update, or restore a machine from
+any phone or laptop on the local network:
 
     http://<pi-ip>:8088     (PIN shown at the end of the install)
 
 Deliberately dependency-free (Python standard library only). If the virtual
-environment, the MQTT broker or the application are broken, this page still
+environment, the MQTT broker, or the application are broken, this page still
 loads — that is the entire point of a repair tool.
 
 Every action is a fixed, named operation; nothing from the browser is ever
 executed as a shell command.
 """
 
+import glob
 import json
 import os
 import re
@@ -25,7 +27,7 @@ import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 MILO_ROOT = os.environ.get('MILO_ROOT', '/opt/milo')
 CONFIG_FILE = os.path.join(MILO_ROOT, 'data', 'config.env')
@@ -39,6 +41,10 @@ _sessions = {}              # token -> last-seen timestamp
 _attempts = {}              # ip -> [timestamps]
 _lock = threading.Lock()
 _job = {'running': False, 'name': '', 'output': '', 'finished_at': 0, 'ok': None}
+
+
+def safe_cwd():
+    return MILO_ROOT if os.path.isdir(MILO_ROOT) else '/'
 
 
 # --------------------------------------------------------------------------
@@ -92,10 +98,28 @@ def main_unit():
     return 'milo-edge.service' if read_config().get('MILO_ROLE') == 'edge' else 'milo-core.service'
 
 
+def strip_getcwd_noise(text):
+    """Filter out harmless shell-init/job-working-directory getcwd warnings."""
+    if not text:
+        return ''
+    cleaned = [
+        ln for ln in text.splitlines()
+        if 'getcwd: cannot access parent directories' not in ln
+    ]
+    return '\n'.join(cleaned)
+
+
 def run(cmd, timeout=600):
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        return p.returncode, (p.stdout or '') + (p.stderr or '')
+        p = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=safe_cwd(),
+        )
+        out = strip_getcwd_noise((p.stdout or '') + (p.stderr or ''))
+        return p.returncode, out
     except subprocess.TimeoutExpired:
         return 124, 'Timed out.'
     except (OSError, ValueError) as e:
@@ -130,17 +154,17 @@ def start_job(name, cmd, timeout=600):
 
 
 ACTIONS = {
-    'restart_app':   lambda: start_job('Restarting the application', ['systemctl', 'restart', main_unit()], 120),
-    'stop_app':      lambda: start_job('Stopping the application', ['systemctl', 'stop', main_unit()], 60),
-    'start_app':     lambda: start_job('Starting the application', ['systemctl', 'start', main_unit()], 120),
-    'restart_broker': lambda: start_job('Restarting the MQTT broker', ['systemctl', 'restart', 'mosquitto'], 60),
-    'run_doctor':    lambda: start_job('Running diagnostics', [tool('milo-doctor'), '--heal'], 180),
-    'update_check':  lambda: start_job('Checking for updates', [tool('milo-update'), '--check'], 120),
-    'update_now':    lambda: start_job('Installing update', [tool('milo-update'), '--force'], 900),
-    'rollback':      lambda: start_job('Rolling back', [tool('milo-update'), '--rollback'], 300),
-    'backup_now':    lambda: start_job('Backing up the database', [tool('milo-backup'), '--rotate'], 300),
-    'restore_latest': lambda: start_job('Restoring the newest backup', [tool('milo-backup'), '--restore-latest'], 300),
-    'reboot':        lambda: start_job('Rebooting', ['systemctl', 'reboot'], 30),
+    'restart_app':    lambda: start_job('Restarting MILO application', ['systemctl', 'restart', main_unit()], 120),
+    'stop_app':       lambda: start_job('Stopping MILO application', ['systemctl', 'stop', main_unit()], 60),
+    'start_app':      lambda: start_job('Starting MILO application', ['systemctl', 'start', main_unit()], 120),
+    'restart_broker': lambda: start_job('Restarting MQTT broker', ['systemctl', 'restart', 'mosquitto'], 60),
+    'run_doctor':     lambda: start_job('Running diagnostics & auto-repair', [tool('milo-doctor'), '--heal'], 240),
+    'update_check':   lambda: start_job('Checking for updates', [tool('milo-update'), '--check'], 120),
+    'update_now':     lambda: start_job('Installing latest update', [tool('milo-update'), '--force'], 900),
+    'rollback':       lambda: start_job('Rolling back to previous release', [tool('milo-update'), '--rollback'], 300),
+    'backup_now':     lambda: start_job('Creating database snapshot', [tool('milo-backup'), '--rotate'], 300),
+    'restore_latest': lambda: start_job('Restoring newest database backup', [tool('milo-backup'), '--restore-latest'], 300),
+    'reboot':         lambda: start_job('Rebooting Raspberry Pi', ['systemctl', 'reboot'], 30),
 }
 
 
@@ -162,7 +186,7 @@ def gather_status():
     backups = []
     bdir = os.path.join(MILO_ROOT, 'backups')
     try:
-        for fn in sorted(os.listdir(bdir), reverse=True)[:8]:
+        for fn in sorted(os.listdir(bdir), reverse=True)[:10]:
             p = os.path.join(bdir, fn)
             st = os.stat(p)
             backups.append({'name': fn, 'size': st.st_size, 'mtime': int(st.st_mtime)})
@@ -185,11 +209,64 @@ def gather_status():
             'mqtt_host': cfg.get('MILO_MQTT_HOST', '127.0.0.1'),
             'channel': cfg.get('MILO_CHANNEL', 'stable'),
             'auto_update': cfg.get('MILO_UPDATE_ENABLED', '1') == '1',
-            'repo': cfg.get('MILO_REPO', ''),
+            'repo': cfg.get('MILO_REPO', 'EKOKIBO/MILO-Backend'),
             'site': cfg.get('MILO_SITE', ''),
+            'has_github_token': bool(cfg.get('MILO_GITHUB_TOKEN', '')),
+            'browser_pass': cfg.get('MILO_BROWSER_PASS', ''),
         },
         'now': int(time.time()),
     }
+
+
+def read_log_source(source):
+    if source == 'broker':
+        _, out = run(['journalctl', '-u', 'mosquitto.service', '-n', '200', '--no-pager'], 30)
+        return out or 'No MQTT broker logs available.'
+    if source == 'update':
+        p = os.path.join(MILO_ROOT, 'logs', 'update.log')
+        if os.path.isfile(p):
+            try:
+                with open(p, 'r', encoding='utf-8', errors='replace') as fh:
+                    return ''.join(fh.readlines()[-250:]) or 'Update log is empty.'
+            except OSError:
+                pass
+        return 'No update.log found yet.'
+    if source == 'install':
+        logs = sorted(glob.glob(os.path.join(MILO_ROOT, 'logs', 'install-*.log')), reverse=True)
+        if logs:
+            try:
+                with open(logs[0], 'r', encoding='utf-8', errors='replace') as fh:
+                    return f"=== {os.path.basename(logs[0])} ===\n" + ''.join(fh.readlines()[-250:])
+            except OSError:
+                pass
+        return 'No install log found.'
+    _, out = run(['journalctl', '-u', main_unit(), '-n', '200', '--no-pager'], 30)
+    return out or 'No application logs available.'
+
+
+def load_mascot_png():
+    candidates = [
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'milo_mascot.png'),
+        os.path.join(MILO_ROOT, 'current', 'deploy', 'milo_mascot.png'),
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            try:
+                with open(c, 'rb') as fh:
+                    return fh.read()
+            except OSError:
+                pass
+    return None
+
+
+FALLBACK_MASCOT_SVG = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+<rect width="64" height="64" rx="16" fill="#4f46e5"/>
+<rect x="14" y="18" width="36" height="30" rx="8" fill="#ffffff"/>
+<circle cx="25" cy="31" r="4" fill="#4f46e5"/>
+<circle cx="39" cy="31" r="4" fill="#4f46e5"/>
+<path d="M24 40c2.5 2.5 13.5 2.5 16 0" stroke="#10b981" stroke-width="3.5" stroke-linecap="round"/>
+<path d="M32 10v8M26 10h12" stroke="#ffffff" stroke-width="3.5" stroke-linecap="round"/>
+</svg>"""
 
 
 # --------------------------------------------------------------------------
@@ -201,7 +278,6 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):        # keep the journal readable
         pass
 
-    # -- helpers --
     def _send(self, code, body, ctype='application/json', extra=None):
         if isinstance(body, (dict, list)):
             body = json.dumps(body)
@@ -246,11 +322,16 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, OSError):
             return {}
 
-    # -- routes --
     def do_GET(self):
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
         if path in ('/', '/index.html'):
             return self._send(200, PAGE, 'text/html; charset=utf-8')
+        if path in ('/milo_mascot.png', '/favicon.ico'):
+            png = load_mascot_png()
+            if png:
+                return self._send(200, png, 'image/png', {'Cache-Control': 'public, max-age=3600'})
+            return self._send(200, FALLBACK_MASCOT_SVG, 'image/svg+xml')
         if path == '/api/session':
             return self._send(200, {'authed': self._authed()})
         if not self._authed():
@@ -258,8 +339,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/status':
             return self._send(200, gather_status())
         if path == '/api/logs':
-            _, out = run(['journalctl', '-u', main_unit(), '-n', '200', '--no-pager'], 30)
-            return self._send(200, out or 'No logs available.', 'text/plain; charset=utf-8')
+            qs = parse_qs(parsed.query)
+            source = (qs.get('source') or ['core'])[0]
+            return self._send(200, read_log_source(source), 'text/plain; charset=utf-8')
         return self._send(404, {'error': 'not found'})
 
     def do_POST(self):
@@ -275,7 +357,7 @@ class Handler(BaseHTTPRequestHandler):
                 if len(tries) >= MAX_ATTEMPTS:
                     return self._send(429, {'error': 'Too many attempts. Wait five minutes.'})
             real = read_config().get('MILO_UI_PIN', '')
-            given = str(body.get('pin', ''))
+            given = str(body.get('pin', '')).strip()
             if real and secrets.compare_digest(given, real):
                 tok = secrets.token_urlsafe(24)
                 with _lock:
@@ -316,11 +398,19 @@ class Handler(BaseHTTPRequestHandler):
                 updates['MILO_CHANNEL'] = ch
             if 'auto_update' in body:
                 updates['MILO_UPDATE_ENABLED'] = '1' if body['auto_update'] else '0'
+            repo = str(body.get('repo', '')).strip()
+            if repo and re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo):
+                updates['MILO_REPO'] = repo
+            tok = str(body.get('github_token', '')).strip()
+            if tok and re.fullmatch(r'[A-Za-z0-9_.-]{10,256}', tok):
+                updates['MILO_GITHUB_TOKEN'] = tok
             if not updates:
                 return self._send(400, {'error': 'Nothing valid to save'})
             if not write_config(updates):
                 return self._send(500, {'error': 'Could not write the configuration file'})
-            return self._send(200, {'ok': True, 'saved': list(updates.keys())})
+            if body.get('apply_restart'):
+                ACTIONS['restart_app']()
+            return self._send(200, {'ok': True, 'saved': list(updates.keys()), 'restarting': bool(body.get('apply_restart'))})
 
         if path == '/api/logout':
             cookie = self.headers.get('Cookie', '')
@@ -334,380 +424,1508 @@ class Handler(BaseHTTPRequestHandler):
 
 
 # --------------------------------------------------------------------------
-# The page — same visual language as the MILO web app (slate + indigo cards,
-# rounded corners, automatic dark mode).
+# Web Interface — matches the MILO Recycling System PWA (mascot logo, Lucide
+# SVG icons, slate/indigo design tokens, segmented tabs, native <dialog>).
 # --------------------------------------------------------------------------
 PAGE = r"""<!doctype html>
-<html lang="en"><head>
+<html lang="en">
+<head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>MILO · Repair &amp; Configure</title>
 <script>
-  (() => {
-    const saved = localStorage.getItem('milo_repair_theme');
-    if (saved === 'light' || saved === 'dark') {
-      document.querySelector('meta[name="color-scheme"]').content = saved;
-    }
-  })();
+try {
+  document.querySelector('meta[name="color-scheme"]').content = localStorage.getItem("color-scheme") ?? "light dark";
+} catch {}
 </script>
+<link rel="icon" href="/milo_mascot.png">
+<title>MILO — Repair &amp; Configure</title>
 <style>
-  :root{
-    color-scheme: light dark;
-    --bg:#f8fafc; --card:#ffffff; --card-glass:rgba(255,255,255,0.85); --line:#e2e8f0;
-    --text:#0f172a; --muted:#64748b;
-    --accent:#4f46e5; --accent-soft:#eef2ff; --accent-text:#4338ca;
-    --ok:#059669; --ok-soft:#ecfdf5; --warn:#d97706; --warn-soft:#fffbeb;
-    --err:#e11d48; --err-soft:#fff1f2; --radius:1rem;
-    --shadow:0 4px 20px -2px rgba(15,23,42,.05), 0 1px 3px rgba(15,23,42,.04);
-    scrollbar-color: #94a3b8 transparent;
-    scrollbar-width: thin;
-    accent-color: var(--accent);
+:root {
+  --bg-light: #f1f5f9;
+  --bg-dark: #0f172a;
+  --card-light: #ffffff;
+  --card-dark: #1e293b;
+  --card-alt-light: #f8fafc;
+  --card-alt-dark: #0f172a;
+  --header-light: rgba(255, 255, 255, 0.88);
+  --header-dark: rgba(30, 41, 59, 0.88);
+  --fg-light: #1e293b;
+  --fg-dark: #f1f5f9;
+  --muted-light: #64748b;
+  --muted-dark: #94a3b8;
+  --border-light: #e2e8f0;
+  --border-dark: #334155;
+  --accent-light: #4f46e5;
+  --accent-dark: #6366f1;
+  --accent-hover-light: #4338ca;
+  --accent-hover-dark: #4f46e5;
+  --accent-soft-light: #eef2ff;
+  --accent-soft-dark: rgba(99, 102, 241, 0.16);
+  --accent-text-light: #4f46e5;
+  --accent-text-dark: #818cf8;
+
+  --ok: #10b981;
+  --ok-soft-light: #ecfdf5;
+  --ok-soft-dark: rgba(16, 185, 129, 0.15);
+  --ok-text-light: #047857;
+  --ok-text-dark: #34d399;
+
+  --warn: #f59e0b;
+  --warn-soft-light: #fffbeb;
+  --warn-soft-dark: rgba(245, 158, 11, 0.15);
+  --warn-text-light: #b45309;
+  --warn-text-dark: #fbbf24;
+
+  --err: #f43f5e;
+  --err-soft-light: #fff1f2;
+  --err-soft-dark: rgba(244, 63, 94, 0.16);
+  --err-text-light: #be123c;
+  --err-text-dark: #fb7185;
+
+  --bg: var(--bg-light);
+  --card: var(--card-light);
+  --card-alt: var(--card-alt-light);
+  --header-bg: var(--header-light);
+  --fg: var(--fg-light);
+  --muted: var(--muted-light);
+  --border: var(--border-light);
+  --accent: var(--accent-light);
+  --accent-hover: var(--accent-hover-light);
+  --accent-soft: var(--accent-soft-light);
+  --accent-text: var(--accent-text-light);
+  --ok-soft: var(--ok-soft-light);
+  --ok-text: var(--ok-text-light);
+  --warn-soft: var(--warn-soft-light);
+  --warn-text: var(--warn-text-light);
+  --err-soft: var(--err-soft-light);
+  --err-text: var(--err-text-light);
+
+  @media (prefers-color-scheme: dark) {
+    --bg: var(--bg-dark);
+    --card: var(--card-dark);
+    --card-alt: var(--card-alt-dark);
+    --header-bg: var(--header-dark);
+    --fg: var(--fg-dark);
+    --muted: var(--muted-dark);
+    --border: var(--border-dark);
+    --accent: var(--accent-dark);
+    --accent-hover: var(--accent-hover-dark);
+    --accent-soft: var(--accent-soft-dark);
+    --accent-text: var(--accent-text-dark);
+    --ok-soft: var(--ok-soft-dark);
+    --ok-text: var(--ok-text-dark);
+    --warn-soft: var(--warn-soft-dark);
+    --warn-text: var(--warn-text-dark);
+    --err-soft: var(--err-soft-dark);
+    --err-text: var(--err-text-dark);
   }
-  @media (prefers-color-scheme: dark){
-    :root:has(> head > meta[name="color-scheme"][content="light dark"]){
-      --bg:#0b1120; --card:#1e293b; --card-glass:rgba(30,41,59,0.85); --line:#334155;
-      --text:#f8fafc; --muted:#94a3b8;
-      --accent:#6366f1; --accent-soft:rgba(99,102,241,0.18); --accent-text:#c7d2fe;
-      --ok:#34d399; --ok-soft:rgba(16,185,129,0.16); --warn:#fbbf24; --warn-soft:rgba(245,158,11,0.16);
-      --err:#fb7185; --err-soft:rgba(244,63,94,0.18);
-      --shadow:0 8px 28px -4px rgba(0,0,0,.35);
-      scrollbar-color: #475569 transparent;
-    }
+
+  @supports (color: light-dark(white, black)) {
+    --bg: light-dark(var(--bg-light), var(--bg-dark));
+    --card: light-dark(var(--card-light), var(--card-dark));
+    --card-alt: light-dark(var(--card-alt-light), var(--card-alt-dark));
+    --header-bg: light-dark(var(--header-light), var(--header-dark));
+    --fg: light-dark(var(--fg-light), var(--fg-dark));
+    --muted: light-dark(var(--muted-light), var(--muted-dark));
+    --border: light-dark(var(--border-light), var(--border-dark));
+    --accent: light-dark(var(--accent-light), var(--accent-dark));
+    --accent-hover: light-dark(var(--accent-hover-light), var(--accent-hover-dark));
+    --accent-soft: light-dark(var(--accent-soft-light), var(--accent-soft-dark));
+    --accent-text: light-dark(var(--accent-text-light), var(--accent-text-dark));
+    --ok-soft: light-dark(var(--ok-soft-light), var(--ok-soft-dark));
+    --ok-text: light-dark(var(--ok-text-light), var(--ok-text-dark));
+    --warn-soft: light-dark(var(--warn-soft-light), var(--warn-soft-dark));
+    --warn-text: light-dark(var(--warn-text-light), var(--warn-text-dark));
+    --err-soft: light-dark(var(--err-soft-light), var(--err-soft-dark));
+    --err-text: light-dark(var(--err-text-light), var(--err-text-dark));
   }
-  :root:has(> head > meta[name="color-scheme"][content="dark"]){
-    --bg:#0b1120; --card:#1e293b; --card-glass:rgba(30,41,59,0.85); --line:#334155;
-    --text:#f8fafc; --muted:#94a3b8;
-    --accent:#6366f1; --accent-soft:rgba(99,102,241,0.18); --accent-text:#c7d2fe;
-    --ok:#34d399; --ok-soft:rgba(16,185,129,0.16); --warn:#fbbf24; --warn-soft:rgba(245,158,11,0.16);
-    --err:#fb7185; --err-soft:rgba(244,63,94,0.18);
-    --shadow:0 8px 28px -4px rgba(0,0,0,.35);
-    scrollbar-color: #475569 transparent;
+
+  color-scheme: light dark;
+  accent-color: var(--accent);
+  color: var(--fg);
+
+  &:has(> head > meta[name="color-scheme"][content="dark"]) {
+    color-scheme: dark;
   }
-  @supports not (scrollbar-color: auto) {
-    ::-webkit-scrollbar { width: 8px; height: 8px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 999px; }
+  &:has(> head > meta[name="color-scheme"][content="light"]) {
+    color-scheme: light;
   }
-  ::selection { background-color: var(--accent); color: #ffffff; }
-  *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--text);
-       font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-       -webkit-font-smoothing:antialiased;line-height:1.5}
-  .wrap{max-width:960px;margin:0 auto;padding:1.25rem 1rem 4rem}
-  header{position:sticky;top:0;z-index:20;background:var(--card-glass);
-         backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
-         border-bottom:1px solid var(--line);
-         padding:.8rem 1.25rem;display:flex;align-items:center;gap:.75rem;flex-wrap:wrap}
-  .brand{display:flex;align-items:center;gap:.65rem}
-  .logo{width:40px;height:40px;border-radius:.75rem;background:linear-gradient(135deg,#4f46e5,#0ea5e9);
-        display:grid;place-items:center;color:#fff;font-weight:900;font-size:1.05rem;letter-spacing:-.5px;
-        box-shadow:0 4px 12px rgba(79,70,229,.35)}
-  h1{font-size:1.1rem;margin:0;font-weight:900;letter-spacing:-.02em}
-  .sub{font-size:.62rem;text-transform:uppercase;letter-spacing:.12em;color:var(--accent-text);font-weight:800}
-  .spacer{flex:1}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
-        padding:1.35rem;margin-top:1.1rem;box-shadow:var(--shadow);transition:border-color .15s}
-  .card h2{font-size:1rem;margin:0 0 .9rem;display:flex;align-items:center;gap:.5rem;font-weight:800;letter-spacing:-.01em}
-  .row{display:flex;align-items:center;gap:.75rem;padding:.65rem 0;border-bottom:1px solid var(--line)}
-  .row:last-child{border-bottom:0}
-  .row .label{font-weight:600;flex:1;min-width:0;font-size:.9rem}
-  .row .detail{color:var(--muted);font-size:.82rem;text-align:right;word-break:break-word;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
-  .dot{width:10px;height:10px;border-radius:50%;flex:none}
-  .dot.ok{background:var(--ok);box-shadow:0 0 0 3px var(--ok-soft)}
-  .dot.warn{background:var(--warn);box-shadow:0 0 0 3px var(--warn-soft)}
-  .dot.fail{background:var(--err);box-shadow:0 0 0 3px var(--err-soft)}
-  .pill{display:inline-flex;align-items:center;gap:.4rem;padding:.35rem .8rem;border-radius:999px;
-        font-size:.75rem;font-weight:800;letter-spacing:.01em}
-  .pill.ok{background:var(--ok-soft);color:var(--ok)}
-  .pill.warn{background:var(--warn-soft);color:var(--warn)}
-  .pill.fail{background:var(--err-soft);color:var(--err)}
-  button{font:inherit;font-weight:700;font-size:.86rem;border:0;border-radius:.65rem;padding:.65rem 1.05rem;cursor:pointer;
-         background:var(--accent);color:#fff;transition:transform .1s,filter .15s,background-color .15s}
-  button:hover:not(:disabled){filter:brightness(1.08)}
-  button:active:not(:disabled){transform:scale(0.98)}
-  button:disabled{opacity:.5;cursor:not-allowed}
-  button.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}
-  button.ghost:hover:not(:disabled){background:var(--accent-soft);border-color:var(--accent-text)}
-  button.danger{background:var(--err)}
-  button.ok{background:var(--ok)}
-  .btns{display:flex;flex-wrap:wrap;gap:.55rem}
-  input,select{font:inherit;width:100%;padding:.65rem .75rem;border-radius:.65rem;border:1px solid var(--line);
-               background:var(--bg);color:var(--text);transition:border-color .15s,box-shadow .15s}
-  input:focus,select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
-  input:not(input[type="range"]):user-invalid{border-color:var(--err);box-shadow:0 0 0 3px var(--err-soft)}
-  label{display:block;font-size:.7rem;font-weight:800;color:var(--muted);margin-bottom:.35rem;
-        text-transform:uppercase;letter-spacing:.06em}
-  .grid{display:grid;gap:.95rem;grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
-  .muted{color:var(--muted);font-size:.82rem}
-  pre{background:var(--bg);border:1px solid var(--line);border-radius:.65rem;padding:.9rem;
-      overflow:auto;max-height:360px;font-size:.75rem;white-space:pre-wrap;word-break:break-word;margin:0;
-      font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
-  .center{min-height:100vh;display:grid;place-items:center;padding:1rem}
-  .login{width:100%;max-width:360px;text-align:center}
-  .login .logo{margin:0 auto 1rem;width:58px;height:58px;font-size:1.5rem;border-radius:1.1rem}
-  .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:1.5rem;z-index:50;
-         background:var(--card);border:1px solid var(--line);border-radius:.8rem;padding:.75rem 1.2rem;
-         box-shadow:0 12px 32px rgba(0,0,0,.22);font-weight:700;font-size:.86rem;max-width:90vw}
-  .banner{background:var(--accent-soft);color:var(--accent-text);border:1px solid var(--accent);
-          border-radius:var(--radius);padding:.85rem 1.1rem;margin-top:1rem;display:flex;align-items:center;gap:.65rem;font-weight:700;font-size:.88rem}
-  .spin{display:inline-block;width:15px;height:15px;border:2.5px solid currentColor;border-right-color:transparent;
-        border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px;flex:none}
-  @keyframes sp{to{transform:rotate(360deg)}}
-  .hidden{display:none!important}
-  @media (max-width:560px){ .row{align-items:flex-start;flex-wrap:wrap} .row .detail{text-align:left;width:100%} }
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  line-height: 1.5;
+  min-height: 100vh;
+}
+svg.lucide {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+  flex-shrink: 0;
+}
+
+/* Header (matches MILO PWA header) */
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: var(--header-bg);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+.header-inner {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 16px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-decoration: none;
+  color: inherit;
+}
+.mascot-badge {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.08);
+  padding: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.mascot-badge img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.brand-title {
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  margin: 0;
+}
+.brand-sub {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent-text);
+  margin: 3px 0 0;
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.machine-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 700;
+}
+@media (max-width: 640px) {
+  .machine-pill { display: none; }
+}
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: var(--card-alt);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.icon-btn:hover {
+  border-color: var(--accent);
+}
+
+/* Main container */
+.container {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 24px 16px 64px;
+}
+
+/* Cards */
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+}
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.card-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 16px;
+  font-weight: 800;
+  margin: 0;
+}
+.card-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Status Banner + KPI Grid */
+.hero-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 18px 22px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  margin-bottom: 16px;
+}
+.hero-banner.ok   { border-left: 5px solid var(--ok); }
+.hero-banner.warn { border-left: 5px solid var(--warn); }
+.hero-banner.fail { border-left: 5px solid var(--err); }
+.hero-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.status-orb {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.status-orb.ok   { background: var(--ok-soft);   color: var(--ok-text); }
+.status-orb.warn { background: var(--warn-soft); color: var(--warn-text); }
+.status-orb.fail { background: var(--err-soft);  color: var(--err-text); }
+.hero-title {
+  font-size: 17px;
+  font-weight: 800;
+  margin: 0;
+}
+.hero-sub {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 2px 0 0;
+}
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 20px;
+}
+@media (max-width: 860px) {
+  .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 480px) {
+  .kpi-grid { grid-template-columns: 1fr; }
+}
+.kpi-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px 16px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.kpi-label {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.kpi-value {
+  font-size: 15px;
+  font-weight: 800;
+  margin-top: 4px;
+}
+.kpi-detail {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+/* Segmented Tabs (matches PWA Admin tabs) */
+.tabs-bar {
+  display: flex;
+  gap: 6px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 6px;
+  margin-bottom: 20px;
+  overflow-x: auto;
+}
+.tab-btn {
+  flex: 1;
+  min-width: max-content;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.tab-btn:hover {
+  color: var(--fg);
+}
+.tab-btn.active {
+  background: var(--accent);
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(79, 70, 229, 0.28);
+}
+.tab-badge {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-weight: 800;
+  background: rgba(255, 255, 255, 0.22);
+}
+.tab-btn:not(.active) .tab-badge.err {
+  background: var(--err-soft);
+  color: var(--err-text);
+}
+.tab-btn:not(.active) .tab-badge.ok {
+  background: var(--ok-soft);
+  color: var(--ok-text);
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 10px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--card-alt);
+  color: var(--fg);
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn-primary {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: transparent;
+  box-shadow: 0 2px 6px rgba(79, 70, 229, 0.25);
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: transparent;
+}
+.btn-success {
+  background: var(--ok);
+  color: #ffffff;
+  border-color: transparent;
+}
+.btn-danger {
+  background: var(--err-soft);
+  color: var(--err-text);
+  border-color: transparent;
+}
+.btn-danger:hover:not(:disabled) {
+  background: var(--err);
+  color: #ffffff;
+}
+.btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Pills */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.pill.ok   { background: var(--ok-soft);   color: var(--ok-text); }
+.pill.warn { background: var(--warn-soft); color: var(--warn-text); }
+.pill.fail { background: var(--err-soft);  color: var(--err-text); }
+
+/* Health Check Rows */
+.checks-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+@media (max-width: 760px) {
+  .checks-grid { grid-template-columns: 1fr; }
+}
+.check-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--card-alt);
+  border: 1px solid var(--border);
+}
+.check-item.fail {
+  border-color: var(--err);
+  background: var(--err-soft);
+}
+.check-item.warn {
+  border-color: var(--warn);
+}
+.check-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.check-dot {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.check-dot.ok   { background: var(--ok-soft);   color: var(--ok-text); }
+.check-dot.warn { background: var(--warn-soft); color: var(--warn-text); }
+.check-dot.fail { background: var(--err-soft);  color: var(--err-text); }
+.check-label {
+  font-size: 13px;
+  font-weight: 700;
+}
+.check-detail {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: right;
+  word-break: break-word;
+}
+.check-item.fail .check-detail {
+  color: var(--err-text);
+  font-weight: 600;
+}
+
+/* Two-column layout */
+.two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+@media (max-width: 820px) {
+  .two-col { grid-template-columns: 1fr; }
+}
+
+/* Forms */
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+@media (max-width: 680px) {
+  .form-grid { grid-template-columns: 1fr; }
+}
+.field label {
+  display: block;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.field-hint {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+input[type="text"],
+input[type="password"],
+input[type="search"],
+select {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--card-alt);
+  color: var(--fg);
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+input:focus, select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.input-group {
+  display: flex;
+  gap: 8px;
+}
+
+/* Terminal / Log Viewer (always dark scheme per component-specific-light-dark-theme) */
+pre.log-viewer {
+  color-scheme: only dark;
+  background: #0b1120;
+  color: #e2e8f0;
+  accent-color: var(--accent);
+  border: 1px solid #1e293b;
+  border-radius: 12px;
+  padding: 14px 16px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  max-height: 420px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+
+/* Backups table list */
+.backup-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+}
+.backup-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--card-alt);
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+.backup-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 700;
+  word-break: break-all;
+}
+
+/* Login Screen */
+.login-wrap {
+  min-height: calc(100vh - 80px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+}
+.login-card {
+  max-width: 400px;
+  width: 100%;
+  text-align: center;
+  padding: 32px 28px;
+}
+.login-mascot {
+  width: 72px;
+  height: 72px;
+  border-radius: 20px;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+  padding: 8px;
+  margin: 0 auto 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.login-mascot img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.pin-input {
+  text-align: center;
+  font-size: 24px !important;
+  font-weight: 800;
+  letter-spacing: 0.3em;
+  padding: 12px !important;
+}
+
+/* Native Modal Dialog (follows modern-web-guidance `dialog`) */
+dialog:modal {
+  overscroll-behavior: contain;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--card);
+  color: var(--fg);
+  padding: 24px;
+  max-width: 400px;
+  width: calc(100% - 32px);
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.35);
+}
+dialog::backdrop {
+  overflow: hidden;
+  overscroll-behavior: contain;
+  background: rgba(15, 23, 42, 0.6);
+  backdrop-filter: blur(4px);
+}
+.dialog-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  background: var(--warn-soft);
+  color: var(--warn-text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 14px;
+}
+.dialog-icon.danger {
+  background: var(--err-soft);
+  color: var(--err-text);
+}
+
+/* Toast notification */
+.toast {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 60;
+  background: var(--fg);
+  color: var(--card);
+  padding: 12px 18px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);
+}
+
+.hidden { display: none !important; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin {
+  width: 16px;
+  height: 16px;
+  border: 2.5px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+  display: inline-block;
+}
 </style>
-</head><body>
+</head>
+<body>
 
-<div id="login" class="center">
-  <form class="login card" onsubmit="doLogin(event)">
-    <div class="logo">M</div>
-    <h1>MILO Repair &amp; Configure</h1>
-    <p class="muted" style="margin:.4rem 0 1.2rem">Enter the 6-digit PIN shown when this machine was installed.</p>
-    <input id="pin" type="password" inputmode="numeric" pattern="[0-9]{4,12}" autocomplete="one-time-code" placeholder="••••••"
-           style="text-align:center;font-size:1.35rem;letter-spacing:.3em;font-weight:800" required>
-    <p id="loginErr" class="pill fail hidden" style="margin:.8rem 0 0"></p>
-    <button style="width:100%;margin-top:1rem;padding:.85rem">Unlock Console</button>
-    <p class="muted" style="margin-top:1.1rem;font-size:.73rem">
-      Forgot PIN? Run on the Pi: <code>sudo milo ui</code>
-    </p>
-  </form>
-</div>
-
-<div id="app" class="hidden">
-  <header>
+<!-- Top Navigation Header (Identical visual identity to the MILO PWA) -->
+<header class="site-header">
+  <div class="header-inner">
     <div class="brand">
-      <div class="logo">M</div>
-      <div><h1>MILO</h1><div class="sub">Repair &amp; Configure</div></div>
-    </div>
-    <div class="spacer"></div>
-    <span id="overallPill" class="pill warn">checking…</span>
-    <button class="ghost" onclick="cycleTheme()" id="themeBtn" title="Switch color scheme">Theme</button>
-    <button class="ghost" onclick="logout()">Log out</button>
-  </header>
-
-  <div class="wrap">
-    <div id="jobBanner" class="banner hidden">
-      <span class="spin"></span>
-      <span id="jobBannerText">Running task…</span>
-    </div>
-
-    <div class="card">
-      <h2>🩺 Machine health</h2>
-      <div id="ident" class="muted" style="margin-bottom:.6rem"></div>
-      <div id="checks"></div>
-      <div class="btns" style="margin-top:1rem">
-        <button onclick="act('run_doctor','Run diagnostics and auto-fix?')">Run diagnostics &amp; fix</button>
-        <button class="ghost" onclick="act('restart_app','Restart the MILO application?')">Restart app</button>
-        <button class="ghost" onclick="act('restart_broker','Restart the MQTT broker?')">Restart broker</button>
-        <button class="ghost" onclick="loadLogs()">View logs</button>
+      <div class="mascot-badge">
+        <img src="/milo_mascot.png" alt="" aria-hidden="true" draggable="false">
       </div>
-      <pre id="logbox" class="hidden" style="margin-top:.9rem"></pre>
-    </div>
-
-    <div class="card">
-      <h2>⬆️ Software &amp; updates</h2>
-      <div id="updateBox"></div>
-      <div class="btns" style="margin-top:1rem">
-        <button onclick="act('update_check')">Check now</button>
-        <button class="ok" onclick="act('update_now','Download and install the latest version? The machine restarts automatically and rolls back if anything fails.')">Install update</button>
-        <button class="ghost" onclick="act('rollback','Go back to the previous version?')">Roll back</button>
+      <div>
+        <h1 class="brand-title">MILO</h1>
+        <p class="brand-sub">Repair &amp; Configure</p>
       </div>
     </div>
 
-    <div class="card">
-      <h2>💾 Backups</h2>
-      <p class="muted">Snapshots are taken daily and before every update. Restoring stops the app briefly.</p>
-      <div id="backups" style="margin-top:.6rem"></div>
-      <div class="btns" style="margin-top:1rem">
-        <button onclick="act('backup_now')">Back up now</button>
-        <button class="danger" onclick="act('restore_latest','Restore the NEWEST backup? Data added since that snapshot will be lost.')">Restore newest</button>
-      </div>
-    </div>
+    <div class="header-actions">
+      <span id="hdr-machine-pill" class="machine-pill hidden">
+        <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></svg>
+        <span id="hdr-machine-text"></span>
+      </span>
 
-    <div class="card">
-      <h2>⚙️ Configuration</h2>
-      <div class="grid">
-        <div><label for="cid">Machine ID</label><input id="cid" placeholder="school-1" required pattern="[A-Za-z0-9_-]{1,32}"></div>
-        <div><label for="cname">Display name</label><input id="cname" placeholder="MILO School"></div>
-        <div><label for="cenv">Environment (theme)</label>
-          <select id="cenv"><option value="">Network default</option><option value="office">Office</option>
-          <option value="school">School</option><option value="city">City</option></select></div>
-        <div><label for="chost">Broker host</label><input id="chost" placeholder="127.0.0.1" required></div>
-        <div><label for="cchan">Update channel</label>
-          <select id="cchan"><option value="stable">Stable</option><option value="beta">Beta</option></select></div>
-        <div><label for="cauto">Automatic updates</label>
-          <select id="cauto"><option value="1">Enabled</option><option value="0">Disabled</option></select></div>
-      </div>
-      <div class="btns" style="margin-top:1rem">
-        <button onclick="saveConfig()">Save configuration</button>
-        <span class="muted" style="align-self:center">Restart the app to apply.</span>
-      </div>
-    </div>
+      <button type="button" class="icon-btn" id="theme-btn" onclick="toggleTheme()" aria-label="Toggle color theme">
+        <svg id="icon-sun" class="lucide hidden" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+        <svg id="icon-moon" class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+      </button>
 
-    <div class="card">
-      <h2>🔌 Power</h2>
-      <div class="btns">
-        <button class="danger" onclick="act('reboot','Reboot this machine now?')">Reboot machine</button>
-      </div>
-      <p class="muted" style="margin-top:.7rem">A reboot is needed after installing the AI HAT+ for the first time.</p>
+      <button type="button" class="icon-btn hidden" id="logout-btn" onclick="logout()">
+        <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
+        <span>Log out</span>
+      </button>
     </div>
+  </div>
+</header>
 
-    <p class="muted" style="text-align:center;margin-top:1.75rem;font-size:.76rem">
-      MILO Recovery Kit · rebuild any machine with<br>
-      <code id="rebuildCmd" style="user-select:all">curl -fsSL &lt;your-site&gt;/recovery/install.sh | sudo bash</code>
+<!-- PIN Login View -->
+<div id="login-view" class="login-wrap hidden">
+  <div class="card login-card">
+    <div class="login-mascot">
+      <img src="/milo_mascot.png" alt="" aria-hidden="true" draggable="false">
+    </div>
+    <h2 style="margin:0 0 6px;font-size:22px;font-weight:900">Technician Access</h2>
+    <p style="margin:0 0 20px;font-size:13px;color:var(--muted)">
+      Enter the 6-digit PIN from your install summary or <code style="font-size:12px">/opt/milo/data/config.env</code>.
     </p>
+    <form onsubmit="login(event)">
+      <input id="pin" class="pin-input" type="password" inputmode="numeric" autocomplete="one-time-code"
+             placeholder="••••••" maxlength="16" required autofocus>
+      <div id="login-err" style="color:var(--err-text);font-size:13px;font-weight:700;min-height:20px;margin:10px 0"></div>
+      <button class="btn btn-primary" style="width:100%;padding:12px;font-size:14px" type="submit">
+        <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        Unlock Machine Console
+      </button>
+    </form>
   </div>
 </div>
 
-<div id="toast" class="toast hidden"></div>
+<!-- Authenticated Console View -->
+<main id="app-view" class="container hidden">
+
+  <!-- Overall Health Hero Banner -->
+  <div id="hero-banner" class="hero-banner ok">
+    <div class="hero-left">
+      <div id="hero-orb" class="status-orb ok">
+        <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></svg>
+      </div>
+      <div>
+        <h2 id="hero-title" class="hero-title">Checking machine health…</h2>
+        <p id="hero-sub" class="hero-sub">Loading diagnostic telemetry…</p>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button type="button" class="btn btn-primary" onclick="act('run_doctor')">
+        <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+        Auto-Repair Issues
+      </button>
+      <button type="button" class="btn" onclick="refresh()">
+        <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+        Refresh
+      </button>
+    </div>
+  </div>
+
+  <!-- Live Background Task Output Card -->
+  <div id="job-card" class="card hidden" style="margin-bottom:18px;border-color:var(--accent)">
+    <div class="card-header" style="margin-bottom:10px">
+      <div class="card-title">
+        <span id="job-spin" class="spin"></span>
+        <span id="job-title">Running task…</span>
+      </div>
+      <span id="job-badge" class="pill warn">In progress</span>
+    </div>
+    <pre id="job-out" class="log-viewer" style="max-height:220px"></pre>
+  </div>
+
+  <!-- 4 At-a-Glance Summary KPI Cards -->
+  <div class="kpi-grid">
+    <div class="kpi-card">
+      <div>
+        <div class="kpi-label">MILO Core Service</div>
+        <div id="kpi-app-val" class="kpi-value">—</div>
+        <div id="kpi-app-det" class="kpi-detail">—</div>
+      </div>
+      <span id="kpi-app-dot" class="check-dot ok">
+        <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></svg>
+      </span>
+    </div>
+    <div class="kpi-card">
+      <div>
+        <div class="kpi-label">MQTT Broker</div>
+        <div id="kpi-mqtt-val" class="kpi-value">—</div>
+        <div id="kpi-mqtt-det" class="kpi-detail">—</div>
+      </div>
+      <span id="kpi-mqtt-dot" class="check-dot ok">
+        <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h.01"/><path d="M2 8.82a15 15 0 0 1 20 0"/><path d="M5 12.859a10 10 0 0 1 14 0"/><path d="M8.5 16.429a5 5 0 0 1 7 0"/></svg>
+      </span>
+    </div>
+    <div class="kpi-card">
+      <div>
+        <div class="kpi-label">AI HAT+ &amp; Vision</div>
+        <div id="kpi-hw-val" class="kpi-value">—</div>
+        <div id="kpi-hw-det" class="kpi-detail">—</div>
+      </div>
+      <span id="kpi-hw-dot" class="check-dot ok">
+        <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/></svg>
+      </span>
+    </div>
+    <div class="kpi-card">
+      <div>
+        <div class="kpi-label">Database &amp; Temp</div>
+        <div id="kpi-db-val" class="kpi-value">—</div>
+        <div id="kpi-db-det" class="kpi-detail">—</div>
+      </div>
+      <span id="kpi-db-dot" class="check-dot ok">
+        <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg>
+      </span>
+    </div>
+  </div>
+
+  <!-- Segmented Navigation Tabs -->
+  <nav class="tabs-bar" aria-label="Console sections">
+    <button type="button" class="tab-btn active" data-tab="health" onclick="switchTab('health')">
+      <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></svg>
+      <span>Health &amp; Controls</span>
+      <span id="tab-health-badge" class="tab-badge hidden"></span>
+    </button>
+    <button type="button" class="tab-btn" data-tab="updates" onclick="switchTab('updates')">
+      <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+      <span>Updates &amp; Backups</span>
+      <span id="tab-update-badge" class="tab-badge hidden">NEW</span>
+    </button>
+    <button type="button" class="tab-btn" data-tab="config" onclick="switchTab('config')">
+      <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+      <span>Configuration</span>
+    </button>
+    <button type="button" class="tab-btn" data-tab="logs" onclick="switchTab('logs')">
+      <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>
+      <span>Live Logs</span>
+    </button>
+  </nav>
+
+  <!-- TAB 1: HEALTH & CONTROLS -->
+  <section id="tab-health">
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header">
+        <h3 class="card-title">
+          <span class="card-icon">
+            <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="m9 12 2 2 4-4"/></svg>
+          </span>
+          Diagnostic Checklist
+        </h3>
+        <span style="font-size:12px;color:var(--muted)">Updated automatically every 6 seconds</span>
+      </div>
+      <div id="checks-grid" class="checks-grid"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">
+          <span class="card-icon">
+            <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" x2="12" y1="2" y2="12"/></svg>
+          </span>
+          Service &amp; Hardware Controls
+        </h3>
+      </div>
+      <div class="btn-row">
+        <button type="button" class="btn btn-primary" onclick="act('restart_app')">
+          <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+          Restart MILO Service
+        </button>
+        <button type="button" class="btn" onclick="act('restart_broker')">
+          <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h.01"/><path d="M2 8.82a15 15 0 0 1 20 0"/><path d="M5 12.859a10 10 0 0 1 14 0"/><path d="M8.5 16.429a5 5 0 0 1 7 0"/></svg>
+          Restart MQTT Broker
+        </button>
+        <button type="button" class="btn" onclick="act('start_app')">
+          <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+          Start App
+        </button>
+        <button type="button" class="btn" onclick="act('stop_app')">
+          <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="5" y="5" rx="2"/></svg>
+          Stop App
+        </button>
+        <button type="button" class="btn btn-danger" onclick="askConfirm('reboot', 'Reboot Raspberry Pi?', 'The machine will go offline for ~45 seconds while it restarts.', true)">
+          <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" x2="12" y1="2" y2="12"/></svg>
+          Reboot Machine
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- TAB 2: UPDATES & BACKUPS -->
+  <section id="tab-updates" class="hidden">
+    <div class="two-col">
+      <!-- Software Updates Card -->
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">
+            <span class="card-icon">
+              <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+            </span>
+            Over-the-Air Software
+          </h3>
+          <span id="upd-pill" class="pill ok">Up to date</span>
+        </div>
+
+        <div id="upd-rows" style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px"></div>
+
+        <div class="btn-row">
+          <button type="button" class="btn btn-primary" onclick="act('update_now')">
+            <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+            Install Latest Release
+          </button>
+          <button type="button" class="btn" onclick="act('update_check')">
+            Check Now
+          </button>
+          <button type="button" class="btn" onclick="askConfirm('rollback', 'Roll back to previous release?', 'This switches /opt/milo/current back to the previous release and restarts MILO.', false)">
+            <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            Roll Back
+          </button>
+        </div>
+      </div>
+
+      <!-- Database Backups Card -->
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">
+            <span class="card-icon">
+              <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg>
+            </span>
+            Database Backups
+          </h3>
+        </div>
+        <p style="margin:0 0 14px;font-size:13px;color:var(--muted)">
+          Daily snapshots are stored in <code>/opt/milo/backups</code> and survive software updates and reinstalls.
+        </p>
+        <div class="btn-row">
+          <button type="button" class="btn btn-primary" onclick="act('backup_now')">
+            <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+            Create Snapshot Now
+          </button>
+          <button type="button" class="btn" onclick="askConfirm('restore_latest', 'Restore newest database backup?', 'The current database will first be saved as pre-restore-*.db before restoring the latest backup.', false)">
+            Restore Newest Snapshot
+          </button>
+        </div>
+        <div id="backups-list" class="backup-list"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TAB 3: CONFIGURATION -->
+  <section id="tab-config" class="hidden">
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">
+          <span class="card-icon">
+            <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+          </span>
+          Machine &amp; Fleet Configuration
+        </h3>
+        <span style="font-size:12px;color:var(--muted)">Saved in <code>/opt/milo/data/config.env</code></span>
+      </div>
+
+      <form onsubmit="saveConfig(event)">
+        <div class="form-grid">
+          <div class="field">
+            <label for="cfg-id">Machine ID</label>
+            <input id="cfg-id" type="text" required placeholder="milo-b8b8f7">
+            <div class="field-hint">Unique identifier used in MQTT topics and fleet analytics.</div>
+          </div>
+          <div class="field">
+            <label for="cfg-name">Display Name</label>
+            <input id="cfg-name" type="text" required placeholder="MILO Lobby #1">
+            <div class="field-hint">Shown in the PWA header badge and Admin machine selector.</div>
+          </div>
+          <div class="field">
+            <label for="cfg-env">Environment Theme</label>
+            <select id="cfg-env">
+              <option value="">Use network default</option>
+              <option value="office">Office / Corporate (Indigo)</option>
+              <option value="school">School / Campus (Amber)</option>
+              <option value="city">City / Public Space (Emerald)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="cfg-host">MQTT Broker Host</label>
+            <input id="cfg-host" type="text" required placeholder="127.0.0.1">
+            <div class="field-hint"><code>127.0.0.1</code> for standalone/core machine.</div>
+          </div>
+          <div class="field">
+            <label for="cfg-channel">Update Channel</label>
+            <select id="cfg-channel">
+              <option value="stable">Stable (GitHub releases, fallback to main)</option>
+              <option value="beta">Beta (latest commit on main branch)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="cfg-auto">Automatic Over-the-Air Updates</label>
+            <select id="cfg-auto">
+              <option value="1">Enabled (checks twice daily, auto-rollback)</option>
+              <option value="0">Disabled (manual updates only)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="cfg-repo">GitHub Backend Repository</label>
+            <input id="cfg-repo" type="text" placeholder="EKOKIBO/MILO-Backend">
+          </div>
+          <div class="field">
+            <label for="cfg-token">GitHub Personal Access Token (Private Repo)</label>
+            <input id="cfg-token" type="password" autocomplete="off" placeholder="Leave blank to keep existing token">
+            <div id="cfg-token-hint" class="field-hint">Read-only Contents permission for OTA updates.</div>
+          </div>
+        </div>
+
+        <!-- Frontend VITE_MQTT_PASS helper -->
+        <div style="margin-top:18px;padding:14px 16px;border-radius:12px;background:var(--card-alt);border:1px solid var(--border)">
+          <label for="cfg-bpass" style="display:block;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:6px">
+            Web App Broker Password (<code>VITE_MQTT_PASS</code> for user `"browser"`)
+          </label>
+          <div class="input-group">
+            <input id="cfg-bpass" type="text" readonly style="font-family:ui-monospace,monospace;font-weight:700">
+            <button type="button" class="btn" onclick="copyBrowserPass()">
+              <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+              Copy
+            </button>
+          </div>
+        </div>
+
+        <div class="btn-row" style="margin-top:18px">
+          <button type="submit" class="btn btn-primary">
+            <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+            Save &amp; Apply (Restart Service)
+          </button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <!-- TAB 4: LIVE LOGS -->
+  <section id="tab-logs" class="hidden">
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">
+          <span class="card-icon">
+            <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>
+          </span>
+          System &amp; Service Logs
+        </h3>
+        <div class="btn-row">
+          <select id="log-source" onchange="loadLogs()" style="width:auto;padding:8px 12px;font-weight:700">
+            <option value="core">MILO Application (milo-core)</option>
+            <option value="broker">MQTT Broker (mosquitto)</option>
+            <option value="update">OTA Updater (update.log)</option>
+            <option value="install">Installer (install.log)</option>
+          </select>
+          <button type="button" class="btn" onclick="loadLogs()">
+            <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+            Refresh
+          </button>
+          <button type="button" class="btn" onclick="copyLogs()">
+            <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+            Copy Logs
+          </button>
+        </div>
+      </div>
+      <pre id="logbox" class="log-viewer">Select Refresh to load service logs…</pre>
+    </div>
+  </section>
+
+</main>
+
+<!-- Native Modal Dialog for Confirmations (follows modern-web-guidance `dialog`) -->
+<dialog id="confirm-dialog" closedby="any" aria-labelledby="confirm-title">
+  <div id="confirm-icon" class="dialog-icon">
+    <svg class="lucide" style="width:26px;height:26px" viewBox="0 0 24 24" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+  </div>
+  <h2 id="confirm-title" style="margin:0 0 8px;font-size:18px;font-weight:800;text-align:center">Confirm Action</h2>
+  <p id="confirm-desc" style="margin:0 0 22px;font-size:13px;color:var(--muted);text-align:center"></p>
+  <form method="dialog" style="display:flex;gap:10px">
+    <button type="submit" value="cancel" class="btn" style="flex:1" autofocus>Cancel</button>
+    <button type="submit" value="confirm" id="confirm-ok-btn" class="btn btn-primary" style="flex:1">Confirm</button>
+  </form>
+</dialog>
+
+<div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
 <script>
-let timer = null, busy = false;
+const $ = (s) => document.querySelector(s);
+let pollTimer = null;
+let cfgLoaded = false;
+let activeTab = 'health';
+let pendingAction = null;
 
-function cycleTheme() {
-  const meta = document.querySelector('meta[name="color-scheme"]');
-  const cur = meta.content;
-  const next = cur === 'light dark' ? 'dark' : cur === 'dark' ? 'light' : 'light dark';
-  meta.content = next;
-  localStorage.setItem('milo_repair_theme', next);
-  toast('Theme: ' + (next === 'light dark' ? 'System' : next), 2000);
+// --- Light-dismiss fallback for <dialog closedby="any"> ---
+const confirmDialog = $('#confirm-dialog');
+if (confirmDialog) {
+  if (!('closedBy' in HTMLDialogElement.prototype)) {
+    const outside = (e, dialog) => {
+      const r = dialog.getBoundingClientRect();
+      return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+    };
+    let pressedOutside = false;
+    confirmDialog.addEventListener('pointerdown', (e) => { pressedOutside = outside(e, confirmDialog); });
+    confirmDialog.addEventListener('pointerup', (e) => { if (pressedOutside && outside(e, confirmDialog)) confirmDialog.close(); });
+  }
+  confirmDialog.addEventListener('close', () => {
+    const choice = confirmDialog.returnValue;
+    confirmDialog.returnValue = '';
+    if (choice === 'confirm' && pendingAction) {
+      const toRun = pendingAction;
+      pendingAction = null;
+      act(toRun);
+    } else {
+      pendingAction = null;
+    }
+  });
 }
 
-const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const toast = (msg, ms = 3500) => {
-  const t = document.getElementById('toast');
-  t.textContent = msg; t.classList.remove('hidden');
-  clearTimeout(t._h); t._h = setTimeout(() => t.classList.add('hidden'), ms);
-};
+function askConfirm(actionName, title, desc, isDanger) {
+  pendingAction = actionName;
+  $('#confirm-title').textContent = title;
+  $('#confirm-desc').textContent = desc;
+  $('#confirm-icon').className = 'dialog-icon' + (isDanger ? ' danger' : '');
+  $('#confirm-ok-btn').className = 'btn ' + (isDanger ? 'btn-danger' : 'btn-primary');
+  confirmDialog.showModal();
+}
 
-async function api(path, opts) {
-  const r = await fetch(path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts));
+// --- Two-state Dark Mode Toggle (modern-web-guidance `dark-mode-toggle`) ---
+function currentRenderedDark() {
+  const meta = document.querySelector('meta[name="color-scheme"]');
+  const val = meta ? meta.content : 'light dark';
+  if (val === 'dark') return true;
+  if (val === 'light') return false;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+
+function syncThemeIcons() {
+  const isDark = currentRenderedDark();
+  $('#icon-sun').classList.toggle('hidden', !isDark);
+  $('#icon-moon').classList.toggle('hidden', isDark);
+}
+
+function toggleTheme() {
+  const sysDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const targetDark = !currentRenderedDark();
+  const targetScheme = targetDark ? 'dark' : 'light';
+  const meta = document.querySelector('meta[name="color-scheme"]');
+  if (targetDark === sysDark) {
+    try { localStorage.removeItem('color-scheme'); } catch {}
+    if (meta) meta.content = 'light dark';
+  } else {
+    try { localStorage.setItem('color-scheme', targetScheme); } catch {}
+    if (meta) meta.content = targetScheme;
+  }
+  syncThemeIcons();
+}
+window.addEventListener('storage', (e) => {
+  if (e.key === 'color-scheme') {
+    const meta = document.querySelector('meta[name="color-scheme"]');
+    if (meta) meta.content = e.newValue ?? 'light dark';
+    syncThemeIcons();
+  }
+});
+syncThemeIcons();
+
+// --- Tabs ---
+function switchTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.tab-btn').forEach((b) => {
+    b.classList.toggle('active', b.dataset.tab === tab);
+  });
+  ['health', 'updates', 'config', 'logs'].forEach((t) => {
+    $('#tab-' + t).classList.toggle('hidden', t !== tab);
+  });
+  if (tab === 'logs') loadLogs();
+}
+
+function toast(msg, ms = 3200) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.classList.remove('hidden');
+  clearTimeout(t._tm);
+  t._tm = setTimeout(() => t.classList.add('hidden'), ms);
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function checkIconSvg(st) {
+  if (st === 'ok') return '<svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+  if (st === 'warn') return '<svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>';
+  return '<svg class="lucide" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg>';
+}
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { headers: {'Content-Type': 'application/json'}, ...opts });
   if (r.status === 401) { show(false); throw new Error('auth'); }
   return r;
 }
 
 function show(authed) {
-  document.getElementById('login').classList.toggle('hidden', authed);
-  document.getElementById('app').classList.toggle('hidden', !authed);
-  if (authed) { refresh(); timer = timer || setInterval(refresh, 5000); }
-  else { clearInterval(timer); timer = null; }
+  $('#login-view').classList.toggle('hidden', authed);
+  $('#app-view').classList.toggle('hidden', !authed);
+  $('#logout-btn').classList.toggle('hidden', !authed);
+  $('#hdr-machine-pill').classList.toggle('hidden', !authed);
+  clearInterval(pollTimer);
+  if (authed) {
+    refresh();
+    pollTimer = setInterval(refresh, 6000);
+  }
 }
 
-async function doLogin(e) {
+async function login(e) {
   e.preventDefault();
-  const err = document.getElementById('loginErr');
+  $('#login-err').textContent = '';
   const r = await fetch('/api/login', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pin: document.getElementById('pin').value })
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ pin: $('#pin').value }),
   });
-  if (r.ok) { err.classList.add('hidden'); show(true); }
-  else { const d = await r.json().catch(() => ({})); err.textContent = d.error || 'Incorrect PIN'; err.classList.remove('hidden'); }
+  const d = await r.json().catch(() => ({}));
+  if (r.ok) { $('#pin').value = ''; cfgLoaded = false; show(true); }
+  else { $('#login-err').textContent = d.error || 'Login failed'; }
 }
 
-async function logout() { await api('/api/logout', { method: 'POST' }); show(false); }
+async function logout() {
+  await fetch('/api/logout', { method: 'POST' });
+  show(false);
+}
+
+function findCheck(checks, prefix) {
+  return (checks || []).find((c) => c.id === prefix || c.id.startsWith(prefix));
+}
 
 async function refresh() {
-  if (busy) return;
   let d;
   try { d = await (await api('/api/status')).json(); } catch { return; }
 
-  const overall = d.doctor.overall || 'warn';
-  const pill = document.getElementById('overallPill');
-  pill.className = 'pill ' + overall;
-  pill.textContent = { ok: '✓ Healthy', warn: '! Warnings', fail: '✗ Needs attention' }[overall] || overall;
+  const doc = d.doctor || {};
+  const checks = doc.checks || [];
+  const overall = doc.overall || 'fail';
 
-  document.getElementById('ident').innerHTML =
-    `<b>${esc(d.doctor.machine_name || d.config.machine_id || 'MILO')}</b> · ${esc(d.config.machine_id)} · ` +
-    `role <b>${esc(d.config.role)}</b> · version <code>${esc(d.doctor.version || '?')}</code>`;
+  // Header machine pill
+  $('#hdr-machine-text').textContent = `${doc.machine_name || doc.machine_id || 'MILO'} · v${doc.version || '?'}`;
 
-  document.getElementById('checks').innerHTML = (d.doctor.checks || []).map(c =>
-    `<div class="row"><span class="dot ${esc(c.status)}"></span>` +
-    `<span class="label">${esc(c.label)}</span><span class="detail">${esc(c.detail)}</span></div>`).join('');
+  // Hero banner
+  const hb = $('#hero-banner');
+  hb.className = 'hero-banner ' + overall;
+  $('#hero-orb').className = 'status-orb ' + overall;
+  const failCount = checks.filter((c) => c.status === 'fail').length;
+  const warnCount = checks.filter((c) => c.status === 'warn').length;
+  $('#hero-title').textContent = overall === 'ok'
+    ? 'All Systems Operational'
+    : overall === 'warn'
+      ? `Running with ${warnCount} warning${warnCount === 1 ? '' : 's'}`
+      : `${failCount} system check${failCount === 1 ? ' needs' : 's need'} attention`;
+  $('#hero-sub').textContent = `Machine ID: ${doc.machine_id || '?'} · Role: ${doc.role || 'both'} · Release: ${doc.version || '?'}`;
 
-  if (d.config.site) {
-    document.getElementById('rebuildCmd').textContent =
-      `curl -fsSL ${d.config.site}/recovery/install.sh | sudo bash`;
+  // Health tab badge
+  const hBadge = $('#tab-health-badge');
+  if (failCount > 0) {
+    hBadge.textContent = failCount;
+    hBadge.className = 'tab-badge err';
+    hBadge.classList.remove('hidden');
+  } else {
+    hBadge.classList.add('hidden');
   }
 
+  // 4 KPI Cards
+  const cApp = findCheck(checks, 'svc_milo-') || { status: 'warn', detail: 'unknown' };
+  $('#kpi-app-val').textContent = cApp.status === 'ok' ? 'Running' : 'Stopped';
+  $('#kpi-app-det').textContent = cApp.detail || '';
+  $('#kpi-app-dot').className = 'check-dot ' + cApp.status;
+
+  const cMosq = findCheck(checks, 'svc_mosquitto') || findCheck(checks, 'mqtt') || { status: 'ok', detail: 'remote' };
+  const cAuth = findCheck(checks, 'mqtt');
+  const mqttOk = cMosq.status === 'ok' && (!cAuth || cAuth.status === 'ok');
+  $('#kpi-mqtt-val').textContent = mqttOk ? 'Connected' : 'Issue Detected';
+  $('#kpi-mqtt-det').textContent = (cAuth && cAuth.status !== 'ok') ? cAuth.detail : (cMosq.detail || '');
+  $('#kpi-mqtt-dot').className = 'check-dot ' + (mqttOk ? 'ok' : 'fail');
+
+  const cHailo = findCheck(checks, 'hailo');
+  const cPy = findCheck(checks, 'hailopy');
+  const hwSt = (!cHailo || cHailo.status === 'ok') && (!cPy || cPy.status === 'ok') ? 'ok' : (cHailo && cHailo.status === 'fail' ? 'fail' : 'warn');
+  $('#kpi-hw-val').textContent = cHailo ? cHailo.detail : 'Core-only';
+  $('#kpi-hw-det').textContent = cPy ? cPy.detail : 'No local camera';
+  $('#kpi-hw-dot').className = 'check-dot ' + hwSt;
+
+  const cDb = findCheck(checks, 'db') || { status: 'ok', detail: '—' };
+  const cTemp = findCheck(checks, 'temp');
+  $('#kpi-db-val').textContent = cDb.detail || '—';
+  $('#kpi-db-det').textContent = cTemp ? `CPU Temp: ${cTemp.detail}` : 'Storage healthy';
+  $('#kpi-db-dot').className = 'check-dot ' + cDb.status;
+
+  // Diagnostic Checklist Grid
+  $('#checks-grid').innerHTML = checks.map((c) => `
+    <div class="check-item ${esc(c.status)}">
+      <div class="check-left">
+        <span class="check-dot ${esc(c.status)}">${checkIconSvg(c.status)}</span>
+        <span class="check-label">${esc(c.label)}</span>
+      </div>
+      <span class="check-detail">${esc(c.detail)}</span>
+    </div>
+  `).join('');
+
+  // Updates & Backups Tab
   const u = d.update || {};
-  document.getElementById('updateBox').innerHTML =
-    `<div class="row"><span class="label">Installed</span><span class="detail">${esc(u.current_version || '?')}</span></div>` +
-    `<div class="row"><span class="label">Channel</span><span class="detail">${esc(u.channel || '?')} · ${u.auto_update ? 'automatic' : 'manual'}</span></div>` +
-    `<div class="row"><span class="label">Available</span><span class="detail">${
-       u.status === 'offline' ? 'offline — cannot check'
-       : u.update_available ? '<b style="color:var(--accent-text)">' + esc(u.available_name) + ' ready to install</b>'
-       : 'up to date'}</span></div>`;
+  const upPill = $('#upd-pill');
+  upPill.className = 'pill ' + (u.update_available ? 'warn' : (u.status === 'ok' ? 'ok' : 'warn'));
+  upPill.textContent = u.update_available ? `Update available: ${u.available_name || ''}` : (u.status === 'ok' ? 'Up to date' : 'Offline / Unchecked');
+  $('#tab-update-badge').classList.toggle('hidden', !u.update_available);
 
-  document.getElementById('backups').innerHTML = (d.backups || []).length
-    ? d.backups.map(b => `<div class="row"><span class="label" style="font-size:.82rem">${esc(b.name)}</span>` +
-        `<span class="detail">${(b.size / 1024).toFixed(0)} KB · ${new Date(b.mtime * 1000).toLocaleString()}</span></div>`).join('')
-    : '<p class="muted">No backups yet.</p>';
+  $('#upd-rows').innerHTML = [
+    ['Active Release', doc.version || u.current_version || '?'],
+    ['Upstream Available', u.available_name || u.available_ref || '—'],
+    ['Update Channel', `${u.channel || d.config?.channel || 'stable'} (${u.repo || d.config?.repo || 'EKOKIBO/MILO-Backend'})`],
+    ['Automatic Checks', u.auto_update ? 'Enabled (every 12 hours)' : 'Disabled'],
+  ].map(([k, v]) => `
+    <div class="backup-row">
+      <span style="font-weight:700">${esc(k)}</span>
+      <span style="color:var(--muted)">${esc(v)}</span>
+    </div>
+  `).join('');
 
-  if (!document.activeElement || !['INPUT', 'SELECT'].includes(document.activeElement.tagName)) {
-    document.getElementById('cid').value = d.config.machine_id || '';
-    document.getElementById('cname').value = d.config.machine_name || '';
-    document.getElementById('cenv').value = d.config.machine_env || '';
-    document.getElementById('chost').value = d.config.mqtt_host || '';
-    document.getElementById('cchan').value = d.config.channel || 'stable';
-    document.getElementById('cauto').value = d.config.auto_update ? '1' : '0';
+  const bks = d.backups || [];
+  $('#backups-list').innerHTML = bks.length
+    ? bks.map((b) => `
+        <div class="backup-row">
+          <span class="backup-name">${esc(b.name)}</span>
+          <span style="color:var(--muted);white-space:nowrap">${(b.size / 1024).toFixed(0)} KB · ${new Date(b.mtime * 1000).toLocaleString()}</span>
+        </div>
+      `).join('')
+    : '<p style="font-size:13px;color:var(--muted);margin:8px 0 0">No database backups created yet.</p>';
+
+  // Configuration Form (populate once so we never overwrite while typing)
+  if (!cfgLoaded && d.config) {
+    $('#cfg-id').value = d.config.machine_id || '';
+    $('#cfg-name').value = d.config.machine_name || '';
+    $('#cfg-env').value = d.config.machine_env || '';
+    $('#cfg-host').value = d.config.mqtt_host || '127.0.0.1';
+    $('#cfg-channel').value = d.config.channel || 'stable';
+    $('#cfg-auto').value = d.config.auto_update ? '1' : '0';
+    $('#cfg-repo').value = d.config.repo || 'EKOKIBO/MILO-Backend';
+    $('#cfg-bpass').value = d.config.browser_pass || '';
+    $('#cfg-token-hint').textContent = d.config.has_github_token
+      ? '✓ A GitHub token is currently saved in config.env. Leave blank to keep it.'
+      : 'Optional: required only if your GitHub repository is Private.';
+    cfgLoaded = true;
   }
 
+  // Background Job Output
   const j = d.job || {};
-  const banner = document.getElementById('jobBanner');
-  banner.classList.toggle('hidden', !j.running);
-  if (j.running) {
-    document.getElementById('jobBannerText').textContent = (j.name || 'Running task') + '…';
-  }
-  document.querySelectorAll('.card button').forEach(b => { b.disabled = !!j.running; });
-  if (!j.running && j.finished_at && j.finished_at !== window._lastJob) {
-    window._lastJob = j.finished_at;
-    toast((j.ok ? '✓ ' : '✗ ') + (j.name || 'Task') + (j.ok ? ' finished' : ' failed'), 6000);
-    if (j.output) { const lb = document.getElementById('logbox'); lb.textContent = j.output; lb.classList.remove('hidden'); }
+  const jc = $('#job-card');
+  if (j.running || (j.finished_at && (d.now - j.finished_at) < 120)) {
+    jc.classList.remove('hidden');
+    $('#job-spin').classList.toggle('hidden', !j.running);
+    $('#job-title').textContent = j.running ? j.name : `${j.name} — ${j.ok ? 'Completed' : 'Finished with warnings/errors'}`;
+    const jb = $('#job-badge');
+    jb.className = 'pill ' + (j.running ? 'warn' : (j.ok ? 'ok' : 'fail'));
+    jb.textContent = j.running ? 'Running' : (j.ok ? 'Success' : 'Failed');
+    $('#job-out').textContent = j.output || (j.running ? 'Working…' : 'Done.');
+  } else {
+    jc.classList.add('hidden');
   }
 }
 
-async function act(action, confirmMsg) {
-  if (confirmMsg && !confirm(confirmMsg)) return;
-  busy = true;
-  try {
-    const r = await api('/api/action', { method: 'POST', body: JSON.stringify({ action }) });
-    const d = await r.json();
-    toast(d.ok ? 'Started…' : (d.message || 'Could not start'), 4000);
-  } catch { toast('Request failed'); }
-  busy = false;
-  setTimeout(refresh, 800);
+async function act(name) {
+  const r = await api('/api/action', { method: 'POST', body: JSON.stringify({ action: name }) });
+  const d = await r.json().catch(() => ({}));
+  toast(r.ok ? `Started: ${name.replace(/_/g, ' ')}` : (d.message || d.error || 'Could not start task'));
+  setTimeout(refresh, 400);
 }
 
-async function saveConfig() {
+async function saveConfig(e) {
+  e.preventDefault();
   const body = {
-    machine_id: document.getElementById('cid').value,
-    machine_name: document.getElementById('cname').value,
-    machine_env: document.getElementById('cenv').value,
-    mqtt_host: document.getElementById('chost').value,
-    channel: document.getElementById('cchan').value,
-    auto_update: document.getElementById('cauto').value === '1'
+    machine_id: $('#cfg-id').value,
+    machine_name: $('#cfg-name').value,
+    machine_env: $('#cfg-env').value,
+    mqtt_host: $('#cfg-host').value,
+    channel: $('#cfg-channel').value,
+    auto_update: $('#cfg-auto').value === '1',
+    repo: $('#cfg-repo').value,
+    github_token: $('#cfg-token').value,
+    apply_restart: true,
   };
   const r = await api('/api/config', { method: 'POST', body: JSON.stringify(body) });
-  const d = await r.json();
-  toast(r.ok ? '✓ Saved — restart the app to apply' : (d.error || 'Save failed'), 5000);
+  const d = await r.json().catch(() => ({}));
+  if (r.ok) {
+    $('#cfg-token').value = '';
+    cfgLoaded = false;
+    toast('Configuration saved & restarting MILO service…', 4500);
+    setTimeout(refresh, 800);
+  } else {
+    toast(d.error || 'Could not save configuration', 4500);
+  }
+}
+
+function copyBrowserPass() {
+  const val = $('#cfg-bpass').value;
+  if (!val) return;
+  navigator.clipboard.writeText(val).then(() => toast('Copied VITE_MQTT_PASS to clipboard')).catch(() => {});
 }
 
 async function loadLogs() {
-  const lb = document.getElementById('logbox');
-  lb.classList.remove('hidden');
-  lb.textContent = 'Loading…';
-  lb.textContent = await (await api('/api/logs')).text();
+  const lb = $('#logbox');
+  const src = $('#log-source').value || 'core';
+  lb.textContent = 'Loading logs…';
+  lb.textContent = await (await api('/api/logs?source=' + encodeURIComponent(src))).text();
   lb.scrollTop = lb.scrollHeight;
 }
 
-fetch('/api/session').then(r => r.json()).then(d => show(d.authed)).catch(() => show(false));
+function copyLogs() {
+  const txt = $('#logbox').textContent || '';
+  navigator.clipboard.writeText(txt).then(() => toast('Logs copied to clipboard')).catch(() => {});
+}
+
+fetch('/api/session').then((r) => r.json()).then((d) => show(d.authed)).catch(() => show(false));
 </script>
 </body></html>
 """
 
 
 def main():
+    try:
+        os.chdir(safe_cwd())
+    except OSError:
+        pass
     cfg = read_config()
     if not cfg.get('MILO_UI_PIN'):
         print('[WARN] No MILO_UI_PIN in config.env — the UI will refuse every login.')
